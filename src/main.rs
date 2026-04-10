@@ -16,16 +16,24 @@ impl IptablesGuard {
 
     pub fn run_iptables(action: &str) {
         let rules = [("INPUT", "0"), ("OUTPUT", "0")];
-        for (chain, qnum) in rules {
-            let _ = Command::new("sudo")
-                .arg("iptables")
-                .arg(action)
-                .arg(chain)
-                .arg("-j")
-                .arg("NFQUEUE")
-                .arg("--queue-num")
-                .arg(qnum)
-                .status();
+        let commands = ["iptables", "ip6tables"];
+
+        for cmd_name in commands {
+            for (chain, qnum) in rules {
+                let status = Command::new("sudo")
+                    .arg(cmd_name) // вызываем сначала iptables, потом ip6tables
+                    .arg(action)
+                    .arg(chain)
+                    .arg("-j")
+                    .arg("NFQUEUE")
+                    .arg("--queue-num")
+                    .arg(qnum)
+                    .status();
+
+                if let Err(e) = status {
+                    eprintln!("Failed to execute {}: {}", cmd_name, e);
+                }
+            }
         }
     }
 }
@@ -57,6 +65,8 @@ fn main() -> std::io::Result<()> {
 
     println!("Start interface listening...");
 
+    // let mut count = 0;
+
     loop {
         match queue.recv() {
             Ok(mut msg) => {
@@ -65,6 +75,9 @@ fn main() -> std::io::Result<()> {
                 }
                 let payload = msg.get_payload();
                 msg.set_verdict(packet_handler::decide_fate(payload));
+                // println!("{}", count);
+                // count += 1;
+                // msg.set_verdict(nfq::Verdict::Accept);
                 if let Err(e) = queue.verdict(msg) {
                     eprintln!("Error sending verdict: {}", e);
                 }
