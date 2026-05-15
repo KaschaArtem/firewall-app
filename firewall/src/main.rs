@@ -1,21 +1,17 @@
 use anyhow::Context as _;
 use aya::programs::{Xdp, XdpFlags};
-use clap::Parser;
+use inquire::Select;
+use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 #[rustfmt::skip]
 use log::{debug, warn};
 use tokio::signal;
 
-#[derive(Debug, Parser)]
-struct Opt {
-    #[clap(short, long, default_value = "wlp3s0")]
-    iface: String,
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let opt = Opt::parse();
-
     env_logger::init();
+
+    let selected_iface = prompt_for_interface()?;
 
     // Bump the memlock rlimit. This is needed for older kernels that don't use the
     // new memcg based accounting, see https://lwn.net/Articles/837122/
@@ -36,6 +32,7 @@ async fn main() -> anyhow::Result<()> {
         env!("OUT_DIR"),
         "/firewall"
     )))?;
+
     match aya_log::EbpfLogger::init(&mut ebpf) {
         Err(e) => {
             // This can happen if you remove all log statements from your eBPF program.
@@ -53,11 +50,12 @@ async fn main() -> anyhow::Result<()> {
             });
         }
     }
-    let Opt { iface } = opt;
+
     let program: &mut Xdp = ebpf.program_mut("firewall").unwrap().try_into()?;
     program.load()?;
-    program.attach(&iface, XdpFlags::default())
-        .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE")?;
+    
+    program.attach(&selected_iface, XdpFlags::default())
+        .context("failed to attach the XDP program")?;
 
     let ctrl_c = signal::ctrl_c();
     println!("Waiting for Ctrl-C...");
@@ -65,4 +63,25 @@ async fn main() -> anyhow::Result<()> {
     println!("Exiting...");
 
     Ok(())
+}
+
+fn prompt_for_interface() -> anyhow::Result<String> {
+    let interfaces = NetworkInterface::show()
+        .context("failed to get list of network interfaces")?;
+    
+    let iface_names: Vec<String> = interfaces
+        .into_iter()
+        .map(|i| i.name)
+        .collect();
+
+    if iface_names.is_empty() {
+        return Err(anyhow::anyhow!("network interfaces are not found"));
+    }
+
+    let selection = Select::new("Choose network interface:", iface_names)
+        .with_help_message("↓ ↑ - navigation, ENTER - confirm")
+        .prompt()
+        .context("error on choosing network interface")?;
+
+    Ok(selection)
 }

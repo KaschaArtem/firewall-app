@@ -2,27 +2,25 @@
 #![no_main]
 
 use aya_ebpf::{bindings::xdp_action, macros::xdp, programs::XdpContext};
-use aya_log_ebpf::info;
+
+mod classifier;
 
 #[xdp]
 pub fn firewall(ctx: XdpContext) -> u32 {
-    match try_firewall(ctx) {
+    match classifier::check_packet(&ctx) {
         Ok(ret) => ret,
         Err(_) => xdp_action::XDP_ABORTED,
     }
 }
 
-fn try_firewall(ctx: XdpContext) -> Result<u32, u32> {
-    info!(&ctx, "received a packet");
-    Ok(xdp_action::XDP_PASS)
-}
-
+// Handling panic for compiler
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
+// License for kernel
 #[unsafe(link_section = "license")]
 #[unsafe(no_mangle)]
 static LICENSE: [u8; 13] = *b"Dual MIT/GPL\0";
