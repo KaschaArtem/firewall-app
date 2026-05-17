@@ -1,13 +1,23 @@
 #![no_std]
 #![no_main]
 
-use aya_ebpf::{bindings::xdp_action, macros::xdp, programs::XdpContext};
+use aya_ebpf::{
+    bindings::xdp_action, 
+    macros::{map, xdp}, 
+    maps::Array,
+    programs::XdpContext
+};
 
 mod classifier;
 
+#[map]
+static CONFIG: Array<u32> = Array::with_max_entries(1, 0);
+
 #[xdp]
 pub fn firewall(ctx: XdpContext) -> u32 {
-    match classifier::check_packet(&ctx) {
+    let mode = CONFIG.get(0).map(|m| *m).unwrap_or(0);
+
+    match classifier::check_packet(&ctx, mode) {
         Ok(ret) => ret,
         Err(_) => xdp_action::XDP_ABORTED,
     }

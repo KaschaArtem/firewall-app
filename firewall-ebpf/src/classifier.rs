@@ -1,5 +1,9 @@
-use aya_ebpf::bindings::xdp_action;
-use aya_ebpf::programs::XdpContext;
+use aya_ebpf::{
+    bindings::xdp_action,
+    macros::map,
+    maps::HashMap,
+    programs::XdpContext,
+};
 use aya_log_ebpf::info;
 use core::mem;
 use network_types::{
@@ -7,7 +11,15 @@ use network_types::{
     ip::{Ipv4Hdr, Ipv6Hdr},
 };
 
-pub fn check_packet(ctx: &XdpContext) -> Result<u32, u32> {
+use firewall_common::IpAddress;
+
+pub const MODE_BLACKLIST: u32 = 0;
+pub const MODE_WHITELIST: u32 = 1;
+
+#[map]
+static IP_MAP: HashMap<IpAddress, u8> = HashMap::with_max_entries(1024, 0);
+
+pub fn check_packet(ctx: &XdpContext, firewall_mode: u32) -> Result<u32, u32> {
     let eth_hdr: *const EthHdr = unsafe { ptr_at(ctx, 0)? };
 
     match unsafe { (*eth_hdr).ether_type } {
@@ -17,7 +29,18 @@ pub fn check_packet(ctx: &XdpContext) -> Result<u32, u32> {
             let src = unsafe { (*ip_hdr).src_addr };
             let dst = unsafe { (*ip_hdr).dst_addr };
 
-            info!(ctx, "IPv4: {:i} -> {:i}", src, dst);
+            let key = IpAddress::Ipv4(src);
+            let is_ip_in_map = unsafe { IP_MAP.get(&key) }.is_some();
+
+            if firewall_mode == MODE_BLACKLIST && is_ip_in_map {
+                info!(ctx, "BLACKLIST DROP IPv4: {:i}", src);
+                return Ok(xdp_action::XDP_DROP);
+            } else if firewall_mode == MODE_WHITELIST && !is_ip_in_map {
+                info!(ctx, "WHITELIST DROP IPv4: {:i}", src);
+                return Ok(xdp_action::XDP_DROP);
+            }
+
+            info!(ctx, "IPv4 PASS: {:i} -> {:i}", src, dst);
         }
 
         EtherType::Ipv6 => {
@@ -26,7 +49,18 @@ pub fn check_packet(ctx: &XdpContext) -> Result<u32, u32> {
             let src = unsafe { (*ip_hdr).src_addr.in6_u.u6_addr8 };
             let dst = unsafe { (*ip_hdr).dst_addr.in6_u.u6_addr8 };
 
-            info!(ctx, "IPv6: {:i} -> {:i}", src, dst);
+            let key = IpAddress::Ipv6(src);
+            let is_ip_in_map = unsafe { IP_MAP.get(&key) }.is_some();
+
+            if firewall_mode == MODE_BLACKLIST && is_ip_in_map {
+                info!(ctx, "BLACKLIST DROP IPv6: {:i}", src);
+                return Ok(xdp_action::XDP_DROP);
+            } else if firewall_mode == MODE_WHITELIST && !is_ip_in_map {
+                info!(ctx, "WHITELIST DROP IPv6: {:i}", src);
+                return Ok(xdp_action::XDP_DROP);
+            }
+
+            info!(ctx, "IPv6 PASS: {:i} -> {:i}", src, dst);
         }
 
         _ => {}

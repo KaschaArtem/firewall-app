@@ -6,10 +6,10 @@ edition.workspace = true
 [dependencies]
 firewall-common = { path = "../firewall-common" }
 
-network-types = "0.0.5"
-
 aya-ebpf = { workspace = true }
 aya-log-ebpf = { workspace = true }
+
+network-types = { version = "0.0.5", default-features = false }
 
 [build-dependencies]
 which = { workspace = true }

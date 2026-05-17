@@ -20,11 +20,17 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "net",
     "signal",
+    "sync",
+    "time"
 ] }
 clap = { workspace = true, features = ["derive"] }
 
-inquire = "0.7"
-network-interface = "1.1"
+inquire = { version = "0.7", features = ["crossterm"] }
+network-interface = { version = "1.1", default-features = false }
+
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+notify = "6.1"
 
 [build-dependencies]
 anyhow = { workspace = true }
