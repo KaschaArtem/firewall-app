@@ -10,7 +10,6 @@ firewall-common = { path = "../firewall-common", features = ["user"] }
 
 anyhow = { workspace = true, default-features = true }
 aya = { workspace = true }
-aya-log = { workspace = true }
 env_logger = { workspace = true }
 libc = { workspace = true }
 log = { workspace = true }
@@ -21,7 +20,8 @@ tokio = { workspace = true, features = [
     "net",
     "signal",
     "sync",
-    "time"
+    "time",
+    "io-util"
 ] }
 clap = { workspace = true, features = ["derive"] }
 

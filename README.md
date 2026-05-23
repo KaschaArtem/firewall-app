@@ -1,5 +1,44 @@
 # firewall
 
+eBPF firewall: XDP on ingress, TC on egress. Rules come from `config.yaml` with hot reload.
+
+## Project layout
+
+```
+firewall/
+├── config.yaml              # runtime configuration
+├── firewall-common/         # shared types (modes, decision events)
+│   └── src/
+│       ├── mode.rs
+│       └── event.rs
+├── firewall-ebpf/           # kernel programs
+│   └── src/
+│       ├── main.rs          # ingress_xdp, egress_tc entrypoints
+│       ├── maps.rs          # CONFIG, LPM tries, DECISIONS ring buffer
+│       └── filter/
+│           ├── verdict.rs   # pass/drop logic
+│           ├── decision.rs  # emit events to userspace
+│           └── packet.rs    # packet bounds checks
+└── firewall/                # userspace agent
+    └── src/
+        ├── main.rs
+        ├── config/          # YAML parsing
+        ├── bpf/             # load, attach, map updates
+        ├── observability/   # decision log (retention window)
+        └── runtime/         # interface picker, config watcher
+```
+
+## Configuration
+
+| Field | Description |
+|-------|-------------|
+| `mode` | `all_pass`, `all_drop`, `default_pass`, `default_drop` |
+| `decision_log_retention_minutes` | How long to keep pass/drop events in memory (1–1440) |
+| `whitelist_ips` | IPs/CIDRs that always pass (in filter modes) |
+| `blacklist_ips` | IPs/CIDRs that always drop |
+
+While running, each pass/drop is recorded via a BPF ring buffer. On **Ctrl-C**, the agent prints all events still within the retention window.
+
 ## Prerequisites
 
 1. stable rust toolchains: `rustup toolchain install stable`
@@ -11,46 +50,24 @@
 
 ## Build & Run
 
-Use `cargo build`, `cargo check`, etc. as normal. Run your program with:
-
 ```shell
-cargo run --release
+cargo build --release
+sudo RUST_LOG=info target/release/firewall
 ```
 
-Cargo build scripts are used to automatically build the eBPF correctly and include it in the
-program.
-
 ## Cross-compiling on macOS
-
-Cross compilation should work on both Intel and Apple Silicon Macs.
 
 ```shell
 CC=${ARCH}-linux-musl-gcc cargo build --package firewall --release \
   --target=${ARCH}-unknown-linux-musl \
   --config=target.${ARCH}-unknown-linux-musl.linker=\"${ARCH}-linux-musl-gcc\"
 ```
-The cross-compiled program `target/${ARCH}-unknown-linux-musl/release/firewall` can be
-copied to a Linux server or VM and run there.
 
 ## License
 
-With the exception of eBPF code, firewall is distributed under the terms
-of either the [MIT license] or the [Apache License] (version 2.0), at your
-option.
+With the exception of eBPF code, firewall is distributed under the terms of either the [MIT license] or the [Apache License] (version 2.0), at your option.
 
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in this crate by you, as defined in the Apache-2.0 license, shall
-be dual licensed as above, without any additional terms or conditions.
-
-### eBPF
-
-All eBPF code is distributed under either the terms of the
-[GNU General Public License, Version 2] or the [MIT license], at your
-option.
-
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in this project by you, as defined in the GPL-2 license, shall be
-dual licensed as above, without any additional terms or conditions.
+eBPF code is distributed under either the [GNU General Public License, Version 2] or the [MIT license], at your option.
 
 [Apache license]: LICENSE-APACHE
 [MIT license]: LICENSE-MIT

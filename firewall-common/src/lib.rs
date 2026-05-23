@@ -1,13 +1,16 @@
 #![no_std]
 
-/// Pass all traffic; whitelist and blacklist are ignored.
-pub const MODE_ALL_PASS: u32 = 0;
-/// Drop all traffic; whitelist and blacklist are ignored.
-pub const MODE_ALL_DROP: u32 = 1;
-/// Pass by default; blacklist drops, whitelist passes (overrides default).
-pub const MODE_DEFAULT_PASS: u32 = 2;
-/// Drop by default; blacklist drops, whitelist passes (overrides default).
-pub const MODE_DEFAULT_DROP: u32 = 3;
+mod mode;
+mod event;
+
+pub use mode::{
+    MODE_ALL_DROP, MODE_ALL_PASS, MODE_DEFAULT_DROP, MODE_DEFAULT_PASS,
+};
+pub use event::{
+    PacketDecisionEvent, ACTION_DROP, ACTION_PASS, DIRECTION_EGRESS, DIRECTION_INGRESS,
+    FAMILY_IPV4, FAMILY_IPV6, REASON_ALL_DROP, REASON_ALL_PASS, REASON_BLACKLIST,
+    REASON_DEFAULT, REASON_NON_IP, REASON_WHITELIST,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(C)]

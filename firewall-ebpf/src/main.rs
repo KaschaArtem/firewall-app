@@ -1,42 +1,36 @@
 #![no_std]
 #![no_main]
 
+#[cfg(not(test))]
+extern crate ebpf_panic;
+
 use aya_ebpf::{
     bindings::xdp_action,
-    macros::{classifier, map, xdp},
-    maps::Array,
+    macros::{classifier, xdp},
     programs::{TcContext, XdpContext},
 };
 
-mod classifier;
+mod filter;
+mod maps;
 
-#[map]
-static CONFIG: Array<u32> = Array::with_max_entries(1, 0);
+use maps::CONFIG;
 
 #[xdp]
-pub fn firewall(ctx: XdpContext) -> u32 {
+pub fn ingress_xdp(ctx: XdpContext) -> u32 {
     let mode = CONFIG.get(0).map(|m| *m).unwrap_or(0);
 
-    match classifier::check_packet_xdp(&ctx, mode) {
+    match filter::check_packet_xdp(&ctx, mode) {
         Ok(ret) => ret,
         Err(_) => xdp_action::XDP_ABORTED,
     }
 }
 
 #[classifier]
-pub fn firewall_egress(ctx: TcContext) -> i32 {
+pub fn egress_tc(ctx: TcContext) -> i32 {
     let mode = CONFIG.get(0).map(|m| *m).unwrap_or(0);
-    classifier::check_packet_tc(&ctx, mode)
+    filter::check_packet_tc(&ctx, mode)
 }
 
-// Handling panic for compiler
-#[cfg(not(test))]
-#[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop {}
-}
-
-// License for kernel
 #[unsafe(link_section = "license")]
 #[unsafe(no_mangle)]
 static LICENSE: [u8; 13] = *b"Dual MIT/GPL\0";
