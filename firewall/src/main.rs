@@ -1,5 +1,5 @@
 use anyhow::Context as _;
-use aya::maps::{Array, HashMap};
+use aya::maps::{Array, LpmTrie, lpm_trie::Key};
 use aya::programs::{SchedClassifier, TcAttachType, Xdp, XdpFlags, tc};
 use inquire::Select;
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
@@ -7,11 +7,9 @@ use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 use log::{debug, error, info, warn};
 use std::path::Path;
 use std::sync::Arc;
-use std::net::IpAddr;
+use ipnet::IpNet;
 use tokio::sync::Mutex;
 use tokio::signal;
-
-use firewall_common::IpAddress;
 
 mod config;
 use config::AppConfig;
@@ -167,6 +165,69 @@ fn prompt_for_interface() -> anyhow::Result<String> {
     Ok(selection)
 }
 
+fn reload_lpm_trie_maps(ebpf: &mut aya::Ebpf, base_name: &str, nets: &[IpNet]) -> anyhow::Result<usize> {
+    let (v4_map, v6_map) = match base_name {
+        "WHITELIST" => ("WHITELIST_V4", "WHITELIST_V6"),
+        "BLACKLIST" => ("BLACKLIST_V4", "BLACKLIST_V6"),
+        _ => anyhow::bail!("unknown LPM map base name: {base_name}"),
+    };
+
+    reload_lpm_trie_v4(ebpf, v4_map, nets)?;
+    reload_lpm_trie_v6(ebpf, v6_map, nets)?;
+
+    Ok(nets.len())
+}
+
+fn reload_lpm_trie_v4(ebpf: &mut aya::Ebpf, map_name: &str, nets: &[IpNet]) -> anyhow::Result<()> {
+    let map_raw = ebpf
+        .map_mut(map_name)
+        .with_context(|| format!("failed to find {map_name} map"))?;
+    let mut trie: LpmTrie<_, [u8; 4], u8> =
+        LpmTrie::try_from(map_raw).with_context(|| format!("failed to cast {map_name}"))?;
+
+    let old_keys: Vec<Key<[u8; 4]>> = trie.keys().filter_map(|k| k.ok()).collect();
+    for key in old_keys {
+        trie.remove(&key)
+            .with_context(|| format!("failed to remove key from {map_name}"))?;
+    }
+
+    for net in nets {
+        let IpNet::V4(v4) = net else {
+            continue;
+        };
+        let key = Key::new(v4.prefix_len().into(), v4.network().octets());
+        trie.insert(&key, 1, 0)
+            .with_context(|| format!("failed to insert {v4} into {map_name}"))?;
+    }
+
+    Ok(())
+}
+
+fn reload_lpm_trie_v6(ebpf: &mut aya::Ebpf, map_name: &str, nets: &[IpNet]) -> anyhow::Result<()> {
+    let map_raw = ebpf
+        .map_mut(map_name)
+        .with_context(|| format!("failed to find {map_name} map"))?;
+    let mut trie: LpmTrie<_, [u8; 16], u8> =
+        LpmTrie::try_from(map_raw).with_context(|| format!("failed to cast {map_name}"))?;
+
+    let old_keys: Vec<Key<[u8; 16]>> = trie.keys().filter_map(|k| k.ok()).collect();
+    for key in old_keys {
+        trie.remove(&key)
+            .with_context(|| format!("failed to remove key from {map_name}"))?;
+    }
+
+    for net in nets {
+        let IpNet::V6(v6) = net else {
+            continue;
+        };
+        let key = Key::new(v6.prefix_len().into(), v6.network().octets());
+        trie.insert(&key, 1, 0)
+            .with_context(|| format!("failed to insert {v6} into {map_name}"))?;
+    }
+
+    Ok(())
+}
+
 async fn reload_config_in_bpf(
     path: &str, 
     shared_ebpf: &Arc<Mutex<aya::Ebpf>>
@@ -181,40 +242,16 @@ async fn reload_config_in_bpf(
     config_map.set(0, mode_value, 0)
         .context("failed to set mode in CONFIG map")?;
 
-    let ip_map_raw = ebpf.map_mut("IP_MAP").context("failed to find IP_MAP map")?;
-    let mut ip_map: HashMap<_, IpAddress, u8> = HashMap::try_from(ip_map_raw)
-        .context("failed to cast IP_MAP")?;
-
-    let old_keys: Vec<IpAddress> = ip_map
-        .keys()
-        .filter_map(|k| k.ok())
-        .collect();
-
-    for key in old_keys {
-        let _ = ip_map.remove(&key); 
-    }
-
-    let target_ips = if mode_value == config::MODE_WHITELIST {
-        config.get_whitelist_ips()
-    } else {
-        config.get_blacklist_ips()
-    };
-
-    let ips_count = target_ips.len();
-
-    for ip in target_ips {
-        let bpf_key = match ip {
-            IpAddr::V4(v4) => IpAddress::ipv4(v4.octets()),
-            IpAddr::V6(v6) => IpAddress::ipv6(v6.octets()),
-        };
-        ip_map.insert(bpf_key, 1, 0)
-            .context("failed to insert IP into IP_MAP")?;
-    }
+    let whitelist_count =
+        reload_lpm_trie_maps(&mut ebpf, "WHITELIST", &config.get_whitelist_nets()?)?;
+    let blacklist_count =
+        reload_lpm_trie_maps(&mut ebpf, "BLACKLIST", &config.get_blacklist_nets()?)?;
 
     println!(
-        " -> Config reloaded successfully. Mode: {}, Loaded IPs into kernel: {}", 
+        " -> Config reloaded. Mode: {}, whitelist: {}, blacklist: {}",
         config.mode.to_uppercase(),
-        ips_count
+        whitelist_count,
+        blacklist_count
     );
 
     Ok(())

@@ -1,25 +1,31 @@
 use aya_ebpf::{
     bindings::xdp_action,
     macros::map,
-    maps::HashMap,
+    maps::{lpm_trie::Key, LpmTrie},
     programs::{TcContext, XdpContext},
     EbpfContext,
 };
 use aya_log_ebpf::info;
 use core::mem;
+use firewall_common::{MODE_ALL_DROP, MODE_ALL_PASS, MODE_DEFAULT_DROP};
 use network_types::{
     eth::{EthHdr, EtherType},
     ip::{Ipv4Hdr, Ipv6Hdr},
 };
 
-use firewall_common::IpAddress;
-
-pub const MODE_BLACKLIST: u32 = 0;
-pub const MODE_WHITELIST: u32 = 1;
+#[map]
+static WHITELIST_V4: LpmTrie<[u8; 4], u8> = LpmTrie::with_max_entries(1024, 0);
 
 #[map]
-static IP_MAP: HashMap<IpAddress, u8> = HashMap::with_max_entries(1024, 0);
+static WHITELIST_V6: LpmTrie<[u8; 16], u8> = LpmTrie::with_max_entries(1024, 0);
 
+#[map]
+static BLACKLIST_V4: LpmTrie<[u8; 4], u8> = LpmTrie::with_max_entries(1024, 0);
+
+#[map]
+static BLACKLIST_V6: LpmTrie<[u8; 16], u8> = LpmTrie::with_max_entries(1024, 0);
+
+#[derive(PartialEq, Eq)]
 pub enum FilterVerdict {
     Pass,
     Drop,
@@ -72,97 +78,111 @@ fn filter_packet<C>(ctx: &C, firewall_mode: u32) -> Result<FilterVerdict, u32>
 where
     C: PacketData + EbpfContext,
 {
+    if firewall_mode == MODE_ALL_PASS {
+        return Ok(FilterVerdict::Pass);
+    }
+    if firewall_mode == MODE_ALL_DROP {
+        return Ok(FilterVerdict::Drop);
+    }
+
     let eth_hdr: *const EthHdr = unsafe { ptr_at(ctx, 0)? };
 
     match unsafe { (*eth_hdr).ether_type } {
-        EtherType::Ipv4 => {
-            let ip_hdr: *const Ipv4Hdr = unsafe { ptr_at(ctx, EthHdr::LEN)? };
+        EtherType::Ipv4 => filter_ipv4(ctx, firewall_mode),
+        EtherType::Ipv6 => filter_ipv6(ctx, firewall_mode),
+        _ => Ok(FilterVerdict::Pass),
+    }
+}
 
-            let src = unsafe { (*ip_hdr).src_addr };
-            let dst = unsafe { (*ip_hdr).dst_addr };
+fn filter_ipv4<C>(ctx: &C, firewall_mode: u32) -> Result<FilterVerdict, u32>
+where
+    C: PacketData + EbpfContext,
+{
+    let ip_hdr: *const Ipv4Hdr = unsafe { ptr_at(ctx, EthHdr::LEN)? };
 
-            let src_key = IpAddress::ipv4(u32::from_be(src).to_be_bytes());
-            let dst_key = IpAddress::ipv4(u32::from_be(dst).to_be_bytes());
+    let src = unsafe { (*ip_hdr).src_addr };
+    let dst = unsafe { (*ip_hdr).dst_addr };
 
-            let src_clean = u32::from_be(src);
-            let dst_clean = u32::from_be(dst);
+    let src_clean = u32::from_be(src);
+    let dst_clean = u32::from_be(dst);
+    let src_octets = src_clean.to_be_bytes();
+    let dst_octets = dst_clean.to_be_bytes();
 
-            let mut src_in_map = false;
-            let mut dst_in_map = false;
-            let mut drop_packet = false;
+    let mut is_drop = false;
+    let mut src_blacklisted = false;
+    let mut dst_blacklisted = false;
 
-            if firewall_mode == MODE_BLACKLIST {
-                if unsafe { IP_MAP.get(&src_key) }.is_some() {
-                    src_in_map = true;
-                    drop_packet = true;
-                } else if unsafe { IP_MAP.get(&dst_key) }.is_some() {
-                    dst_in_map = true;
-                    drop_packet = true;
-                }
-            } else if firewall_mode == MODE_WHITELIST {
-                let src_found = unsafe { IP_MAP.get(&src_key) }.is_some();
-                let dst_found = unsafe { IP_MAP.get(&dst_key) }.is_some();
-                
-                src_in_map = src_found;
-                dst_in_map = dst_found;
-                
-                if !src_found || !dst_found {
-                    drop_packet = true;
-                }
-            }
-
-            if drop_packet {
-                log_ipv4_drop(ctx, firewall_mode, src_clean, dst_clean, src_in_map, dst_in_map);
-                return Ok(FilterVerdict::Drop);
-            }
-
-            info!(ctx, "IPv4 PASS: {:i} -> {:i}", src_clean, dst_clean);
-        }
-
-        EtherType::Ipv6 => {
-            let ip_hdr: *const Ipv6Hdr = unsafe { ptr_at(ctx, EthHdr::LEN)? };
-
-            let src = unsafe { (*ip_hdr).src_addr.in6_u.u6_addr8 };
-            let dst = unsafe { (*ip_hdr).dst_addr.in6_u.u6_addr8 };
-
-            let src_key = IpAddress::ipv6(src);
-            let dst_key = IpAddress::ipv6(dst);
-            
-            let mut src_in_map = false;
-            let mut dst_in_map = false;
-            let mut drop_packet = false;
-
-            if firewall_mode == MODE_BLACKLIST {
-                if unsafe { IP_MAP.get(&src_key) }.is_some() {
-                    src_in_map = true;
-                    drop_packet = true;
-                } else if unsafe { IP_MAP.get(&dst_key) }.is_some() {
-                    dst_in_map = true;
-                    drop_packet = true;
-                }
-            } else if firewall_mode == MODE_WHITELIST {
-                let src_found = unsafe { IP_MAP.get(&src_key) }.is_some();
-                let dst_found = unsafe { IP_MAP.get(&dst_key) }.is_some();
-
-                src_in_map = src_found;
-                dst_in_map = dst_found;
-
-                if !src_found || !dst_found {
-                    drop_packet = true;
-                }
-            }
-        
-            if drop_packet {
-                log_ipv6_drop(ctx, firewall_mode, src, dst, src_in_map, dst_in_map);
-                return Ok(FilterVerdict::Drop);
-            }
-
-            info!(ctx, "IPv6 PASS: {:i} -> {:i}", src, dst);
-        }
-
-        _ => {}
+    // If-else chain only: do not combine map lookups with `||` (verifier rejects pointer OR).
+    if BLACKLIST_V4.get(&Key::new(32, src_octets)).is_some() {
+        src_blacklisted = true;
+        is_drop = true;
+    } else if BLACKLIST_V4.get(&Key::new(32, dst_octets)).is_some() {
+        dst_blacklisted = true;
+        is_drop = true;
+    } else if WHITELIST_V4.get(&Key::new(32, src_octets)).is_some() {
+        is_drop = false;
+    } else if WHITELIST_V4.get(&Key::new(32, dst_octets)).is_some() {
+        is_drop = false;
+    } else if firewall_mode == MODE_DEFAULT_DROP {
+        is_drop = true;
     }
 
+    if is_drop {
+        log_ipv4_drop(
+            ctx,
+            firewall_mode,
+            src_clean,
+            dst_clean,
+            src_blacklisted,
+            dst_blacklisted,
+        );
+        return Ok(FilterVerdict::Drop);
+    }
+
+    info!(ctx, "IPv4 PASS: {:i} -> {:i}", src_clean, dst_clean);
+    Ok(FilterVerdict::Pass)
+}
+
+fn filter_ipv6<C>(ctx: &C, firewall_mode: u32) -> Result<FilterVerdict, u32>
+where
+    C: PacketData + EbpfContext,
+{
+    let ip_hdr: *const Ipv6Hdr = unsafe { ptr_at(ctx, EthHdr::LEN)? };
+
+    let src = unsafe { (*ip_hdr).src_addr.in6_u.u6_addr8 };
+    let dst = unsafe { (*ip_hdr).dst_addr.in6_u.u6_addr8 };
+
+    let mut is_drop = false;
+    let mut src_blacklisted = false;
+    let mut dst_blacklisted = false;
+
+    if BLACKLIST_V6.get(&Key::new(128, src)).is_some() {
+        src_blacklisted = true;
+        is_drop = true;
+    } else if BLACKLIST_V6.get(&Key::new(128, dst)).is_some() {
+        dst_blacklisted = true;
+        is_drop = true;
+    } else if WHITELIST_V6.get(&Key::new(128, src)).is_some() {
+        is_drop = false;
+    } else if WHITELIST_V6.get(&Key::new(128, dst)).is_some() {
+        is_drop = false;
+    } else if firewall_mode == MODE_DEFAULT_DROP {
+        is_drop = true;
+    }
+
+    if is_drop {
+        log_ipv6_drop(
+            ctx,
+            firewall_mode,
+            src,
+            dst,
+            src_blacklisted,
+            dst_blacklisted,
+        );
+        return Ok(FilterVerdict::Drop);
+    }
+
+    info!(ctx, "IPv6 PASS: {:i} -> {:i}", src, dst);
     Ok(FilterVerdict::Pass)
 }
 
@@ -171,19 +191,15 @@ fn log_ipv4_drop<C: EbpfContext>(
     firewall_mode: u32,
     src: u32,
     dst: u32,
-    src_in_map: bool,
-    dst_in_map: bool,
+    src_blacklist: bool,
+    dst_blacklist: bool,
 ) {
-    if firewall_mode == MODE_BLACKLIST {
-        if src_in_map {
-            info!(ctx, "BLACKLIST DROP IPv4 src: {:i}", src);
-        } else if dst_in_map {
-            info!(ctx, "BLACKLIST DROP IPv4 dst: {:i}", dst);
-        }
-    } else if src_in_map {
-        info!(ctx, "WHITELIST DROP IPv4 dst: {:i}", dst);
-    } else {
-        info!(ctx, "WHITELIST DROP IPv4 src: {:i}", src);
+    if src_blacklist {
+        info!(ctx, "BLACKLIST DROP IPv4 src: {:i}", src);
+    } else if dst_blacklist {
+        info!(ctx, "BLACKLIST DROP IPv4 dst: {:i}", dst);
+    } else if firewall_mode == MODE_DEFAULT_DROP {
+        info!(ctx, "DEFAULT DROP IPv4: {:i} -> {:i}", src, dst);
     }
 }
 
@@ -192,19 +208,15 @@ fn log_ipv6_drop<C: EbpfContext>(
     firewall_mode: u32,
     src: [u8; 16],
     dst: [u8; 16],
-    src_in_map: bool,
-    dst_in_map: bool,
+    src_blacklist: bool,
+    dst_blacklist: bool,
 ) {
-    if firewall_mode == MODE_BLACKLIST {
-        if src_in_map {
-            info!(ctx, "BLACKLIST DROP IPv6 src: {:i}", src);
-        } else if dst_in_map {
-            info!(ctx, "BLACKLIST DROP IPv6 dst: {:i}", dst);
-        }
-    } else if src_in_map {
-        info!(ctx, "WHITELIST DROP IPv6 dst: {:i}", dst);
-    } else {
-        info!(ctx, "WHITELIST DROP IPv6 src: {:i}", src);
+    if src_blacklist {
+        info!(ctx, "BLACKLIST DROP IPv6 src: {:i}", src);
+    } else if dst_blacklist {
+        info!(ctx, "BLACKLIST DROP IPv6 dst: {:i}", dst);
+    } else if firewall_mode == MODE_DEFAULT_DROP {
+        info!(ctx, "DEFAULT DROP IPv6: {:i} -> {:i}", src, dst);
     }
 }
 
