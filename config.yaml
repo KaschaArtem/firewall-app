@@ -1,7 +1,0 @@
-mode: "blacklist"
-
-# whitelist_ips:
-#   - 127.0.0.1
-
-blacklist_ips:
-  - 142.250.130.190
