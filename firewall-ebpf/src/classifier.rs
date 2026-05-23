@@ -29,18 +29,21 @@ pub fn check_packet(ctx: &XdpContext, firewall_mode: u32) -> Result<u32, u32> {
             let src = unsafe { (*ip_hdr).src_addr };
             let dst = unsafe { (*ip_hdr).dst_addr };
 
-            let key = IpAddress::Ipv4(src);
+            let key = IpAddress::ipv4(u32::from_be(src).to_be_bytes());
             let is_ip_in_map = unsafe { IP_MAP.get(&key) }.is_some();
 
+            let src_clean = u32::from_be(src);
+            let dst_clean = u32::from_be(dst);
+
             if firewall_mode == MODE_BLACKLIST && is_ip_in_map {
-                info!(ctx, "BLACKLIST DROP IPv4: {:i}", src);
+                info!(ctx, "BLACKLIST DROP IPv4: {:i}", src_clean);
                 return Ok(xdp_action::XDP_DROP);
             } else if firewall_mode == MODE_WHITELIST && !is_ip_in_map {
-                info!(ctx, "WHITELIST DROP IPv4: {:i}", src);
+                info!(ctx, "WHITELIST DROP IPv4: {:i}", src_clean);
                 return Ok(xdp_action::XDP_DROP);
             }
 
-            info!(ctx, "IPv4 PASS: {:i} -> {:i}", src, dst);
+            info!(ctx, "IPv4 PASS: {:i} -> {:i}", src_clean, dst_clean);
         }
 
         EtherType::Ipv6 => {
@@ -49,7 +52,7 @@ pub fn check_packet(ctx: &XdpContext, firewall_mode: u32) -> Result<u32, u32> {
             let src = unsafe { (*ip_hdr).src_addr.in6_u.u6_addr8 };
             let dst = unsafe { (*ip_hdr).dst_addr.in6_u.u6_addr8 };
 
-            let key = IpAddress::Ipv6(src);
+            let key = IpAddress::ipv6(src);
             let is_ip_in_map = unsafe { IP_MAP.get(&key) }.is_some();
 
             if firewall_mode == MODE_BLACKLIST && is_ip_in_map {

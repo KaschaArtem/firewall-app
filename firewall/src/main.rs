@@ -1,5 +1,5 @@
 use anyhow::Context as _;
-use aya::maps::Array;
+use aya::maps::{Array, HashMap};
 use aya::programs::{Xdp, XdpFlags};
 use inquire::Select;
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
@@ -7,8 +7,11 @@ use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 use log::{debug, error, info, warn};
 use std::path::Path;
 use std::sync::Arc;
+use std::net::IpAddr;
 use tokio::sync::Mutex;
 use tokio::signal;
+
+use firewall_common::IpAddress;
 
 mod config;
 use config::AppConfig;
@@ -152,11 +155,44 @@ async fn reload_config_in_bpf(
     
     let mut config_map: Array<_, u32> = Array::try_from(ebpf.map_mut("CONFIG").unwrap())
         .context("failed to find CONFIG map")?;
-
     config_map.set(0, mode_value, 0)
         .context("failed to set mode in CONFIG map")?;
 
-    println!(" -> Config reloaded successfully. Mode set to: {}", config.mode.to_uppercase());
+    let ip_map_raw = ebpf.map_mut("IP_MAP").context("failed to find IP_MAP map")?;
+    let mut ip_map: HashMap<_, IpAddress, u8> = HashMap::try_from(ip_map_raw)
+        .context("failed to cast IP_MAP")?;
+
+    let old_keys: Vec<IpAddress> = ip_map
+        .keys()
+        .filter_map(|k| k.ok())
+        .collect();
+
+    for key in old_keys {
+        let _ = ip_map.remove(&key); 
+    }
+
+    let target_ips = if mode_value == config::MODE_WHITELIST {
+        config.get_whitelist_ips()
+    } else {
+        config.get_blacklist_ips()
+    };
+
+    let ips_count = target_ips.len();
+
+    for ip in target_ips {
+        let bpf_key = match ip {
+            IpAddr::V4(v4) => IpAddress::ipv4(v4.octets()),
+            IpAddr::V6(v6) => IpAddress::ipv6(v6.octets()),
+        };
+        ip_map.insert(bpf_key, 1, 0)
+            .context("failed to insert IP into IP_MAP")?;
+    }
+
+    println!(
+        " -> Config reloaded successfully. Mode: {}, Loaded IPs into kernel: {}", 
+        config.mode.to_uppercase(),
+        ips_count
+    );
 
     Ok(())
 }

@@ -1,6 +1,7 @@
 use anyhow::Context as _;
 use serde::Deserialize;
 use std::fs;
+use std::net::IpAddr;
 use std::path::Path;
 
 pub const MODE_BLACKLIST: u32 = 0;
@@ -9,6 +10,8 @@ pub const MODE_WHITELIST: u32 = 1;
 #[derive(Deserialize, Debug, Clone)]
 pub struct AppConfig {
     pub mode: String,
+    pub whitelist_ips: Option<Vec<IpAddr>>,
+    pub blacklist_ips: Option<Vec<IpAddr>>,
 }
 
 impl AppConfig {
@@ -28,9 +31,17 @@ impl AppConfig {
             "whitelist" => Ok(MODE_WHITELIST),
             "blacklist" => Ok(MODE_BLACKLIST),
             _ => Err(anyhow::anyhow!(
-                "Unknown mode '{}' in config. Use 'whitelist' or 'blacklist'.", 
+                "Unknown mode '{}'. Use 'whitelist' or 'blacklist'.", 
                 self.mode
             )),
         }
+    }
+
+    pub fn get_whitelist_ips(&self) -> Vec<IpAddr> {
+        self.whitelist_ips.clone().unwrap_or_default()
+    }
+
+    pub fn get_blacklist_ips(&self) -> Vec<IpAddr> {
+        self.blacklist_ips.clone().unwrap_or_default()
     }
 }
