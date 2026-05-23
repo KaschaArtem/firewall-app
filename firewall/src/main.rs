@@ -1,6 +1,6 @@
 use anyhow::Context as _;
 use aya::maps::{Array, HashMap};
-use aya::programs::{Xdp, XdpFlags};
+use aya::programs::{SchedClassifier, TcAttachType, Xdp, XdpFlags, tc};
 use inquire::Select;
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 #[rustfmt::skip]
@@ -67,8 +67,31 @@ async fn main() -> anyhow::Result<()> {
     let program: &mut Xdp = ebpf.program_mut("firewall").unwrap().try_into()?;
     program.load()?;
     
-    program.attach(&selected_iface, XdpFlags::default())
+    program
+        .attach(&selected_iface, XdpFlags::default())
         .context("failed to attach the XDP program")?;
+
+    let _ = tc::qdisc_detach_program(&selected_iface, TcAttachType::Egress, "firewall_egress");
+    
+    let _ = std::process::Command::new("tc")
+            .args(&["qdisc", "del", "dev", &selected_iface, "clsact"])
+            .output();
+
+    tc::qdisc_add_clsact(&selected_iface).context("failed to add clsact qdisc")?;
+
+    let tc_program: &mut SchedClassifier = ebpf
+        .program_mut("firewall_egress")
+        .context("failed to find firewall_egress TC program")?
+        .try_into()
+        .context("failed to cast firewall_egress to SchedClassifier")?;
+    tc_program.load()?;
+    tc_program
+        .attach(&selected_iface, TcAttachType::Egress)
+        .context("failed to attach TC egress program")?;
+
+    info!(
+        "Attached ingress XDP and egress TC on {selected_iface} (inbound + outbound filtering)"
+    );
 
     // Initial configuration
     let shared_ebpf = Arc::new(Mutex::new(ebpf));

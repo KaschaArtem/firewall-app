@@ -2,10 +2,10 @@
 #![no_main]
 
 use aya_ebpf::{
-    bindings::xdp_action, 
-    macros::{map, xdp}, 
+    bindings::xdp_action,
+    macros::{classifier, map, xdp},
     maps::Array,
-    programs::XdpContext
+    programs::{TcContext, XdpContext},
 };
 
 mod classifier;
@@ -17,10 +17,16 @@ static CONFIG: Array<u32> = Array::with_max_entries(1, 0);
 pub fn firewall(ctx: XdpContext) -> u32 {
     let mode = CONFIG.get(0).map(|m| *m).unwrap_or(0);
 
-    match classifier::check_packet(&ctx, mode) {
+    match classifier::check_packet_xdp(&ctx, mode) {
         Ok(ret) => ret,
         Err(_) => xdp_action::XDP_ABORTED,
     }
+}
+
+#[classifier]
+pub fn firewall_egress(ctx: TcContext) -> i32 {
+    let mode = CONFIG.get(0).map(|m| *m).unwrap_or(0);
+    classifier::check_packet_tc(&ctx, mode)
 }
 
 // Handling panic for compiler
