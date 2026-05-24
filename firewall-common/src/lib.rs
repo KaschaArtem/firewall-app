@@ -44,6 +44,8 @@ pub const REASON_BLACKLIST: u8 = 2;
 pub const REASON_WHITELIST: u8 = 3;
 pub const REASON_DEFAULT: u8 = 4;
 pub const REASON_NON_IP: u8 = 5;
+/// Truncated header, bad version/length, or failed IPv4 header checksum.
+pub const REASON_MALFORMED: u8 = 6;
 
 pub const FAMILY_IPV4: u8 = 4;
 pub const FAMILY_IPV6: u8 = 6;

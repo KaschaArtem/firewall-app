@@ -12,6 +12,7 @@ use aya_ebpf::{
 
 mod filter;
 mod maps;
+mod packet;
 
 use maps::CONFIG;
 
