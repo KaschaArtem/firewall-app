@@ -1,8 +1,5 @@
 use anyhow::Context as _;
-use firewall_common::{
-    CONFIG_FLAG_IFACE_EXTERNAL, CONFIG_FLAG_RPF_ENABLED, LIST_DIR_BOTH, LIST_DIR_EGRESS,
-    LIST_DIR_INGRESS,
-};
+use firewall_common::{CONFIG_FLAG_RPF_ENABLED, LIST_DIR_BOTH, LIST_DIR_EGRESS, LIST_DIR_INGRESS};
 use ipnet::IpNet;
 use serde::Deserialize;
 use std::fs;
@@ -58,30 +55,13 @@ pub struct AppConfig {
 }
 
 /// Reverse-path check: drop ingress packets whose source is in an internal prefix.
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, Default)]
 pub struct RpfConfig {
     #[serde(default)]
     pub enabled: bool,
-    /// `external` — apply RPF on ingress; `internal` — LAN port, skip RPF.
-    #[serde(default = "default_rpf_interface_role")]
-    pub interface_role: String,
     /// Private/site prefixes; defaults to RFC1918 + loopback when omitted.
     #[serde(default)]
     pub internal_subnets: Option<Vec<String>>,
-}
-
-impl Default for RpfConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            interface_role: default_rpf_interface_role(),
-            internal_subnets: None,
-        }
-    }
-}
-
-fn default_rpf_interface_role() -> String {
-    "external".to_string()
 }
 
 /// `127.0.0.1` or `{ ip: 10.0.0.0/8, direction: egress }`.
@@ -207,20 +187,12 @@ impl AppConfig {
         parse_ip_list("blacklist_ips", self.blacklist_ips.as_deref())
     }
 
-    pub fn rpf_config_flags(&self) -> anyhow::Result<u32> {
-        if !self.rpf.enabled {
-            return Ok(0);
+    pub fn rpf_config_flags(&self) -> u32 {
+        if self.rpf.enabled {
+            CONFIG_FLAG_RPF_ENABLED
+        } else {
+            0
         }
-
-        let mut flags = CONFIG_FLAG_RPF_ENABLED;
-        match self.rpf.interface_role.trim().to_lowercase().as_str() {
-            "external" | "wan" | "uplink" => flags |= CONFIG_FLAG_IFACE_EXTERNAL,
-            "internal" | "lan" | "trusted" => {}
-            other => anyhow::bail!(
-                "rpf.interface_role '{other}': use external or internal"
-            ),
-        }
-        Ok(flags)
     }
 
     pub fn get_rpf_internal_nets(&self) -> anyhow::Result<Vec<IpNet>> {
@@ -244,7 +216,6 @@ impl AppConfig {
 
     fn validate_rpf(&self) -> anyhow::Result<()> {
         if self.rpf.enabled {
-            let _ = self.rpf_config_flags()?;
             let _ = self.get_rpf_internal_nets()?;
         }
         Ok(())
@@ -367,15 +338,12 @@ mode: default_pass
 decision_log_retention_minutes: 5
 rpf:
   enabled: true
-  interface_role: external
   internal_subnets:
     - "10.60.0.0/16"
 "#;
         let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(config.rpf.enabled);
-        let flags = config.rpf_config_flags().unwrap();
-        assert_ne!(flags & CONFIG_FLAG_RPF_ENABLED, 0);
-        assert_ne!(flags & CONFIG_FLAG_IFACE_EXTERNAL, 0);
+        assert_ne!(config.rpf_config_flags() & CONFIG_FLAG_RPF_ENABLED, 0);
         let nets = config.get_rpf_internal_nets().unwrap();
         assert_eq!(nets.len(), 1);
     }
@@ -387,7 +355,6 @@ mode: default_pass
 decision_log_retention_minutes: 5
 rpf:
   enabled: true
-  interface_role: external
 "#;
         let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
         let nets = config.get_rpf_internal_nets().unwrap();

@@ -11,7 +11,6 @@ pub const CONFIG_INDEX_FLAGS: u32 = 1;
 
 /// `CONFIG[CONFIG_INDEX_FLAGS]` bits.
 pub const CONFIG_FLAG_RPF_ENABLED: u32 = 1 << 0;
-pub const CONFIG_FLAG_IFACE_EXTERNAL: u32 = 1 << 1;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]

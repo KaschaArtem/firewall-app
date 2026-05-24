@@ -58,7 +58,7 @@ pub fn attach_programs(ebpf: &mut aya::Ebpf, interface: &str) -> anyhow::Result<
 }
 
 pub fn apply_config_to_ebpf(ebpf: &mut aya::Ebpf, config: &AppConfig) -> anyhow::Result<()> {
-    set_config(ebpf, config.get_ebpf_mode()?, config.rpf_config_flags()?)?;
+    set_config(ebpf, config.get_ebpf_mode()?, config.rpf_config_flags())?;
     reload_ip_lists(
         ebpf,
         &config.get_whitelist_entries()?,

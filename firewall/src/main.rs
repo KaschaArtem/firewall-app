@@ -90,9 +90,8 @@ async fn main() -> anyhow::Result<()> {
         initial_config.decision_log_max_events_per_second,
     );
     if initial_config.rpf.enabled {
-        let role = initial_config.rpf.interface_role.as_str();
         let nets = initial_config.get_rpf_internal_nets().unwrap_or_default();
-        info!("RPF enabled (interface_role={role}, {} internal prefix(es))", nets.len());
+        info!("RPF enabled ({} internal prefix(es) on ingress)", nets.len());
     }
 
     println!("Waiting for Ctrl-C...");

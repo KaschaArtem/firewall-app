@@ -2,9 +2,7 @@
 
 use aya_ebpf::maps::lpm_trie::Key;
 use aya_ebpf::maps::LpmTrie;
-use firewall_common::{
-    CONFIG_FLAG_IFACE_EXTERNAL, CONFIG_FLAG_RPF_ENABLED, CONFIG_INDEX_FLAGS, DIRECTION_INGRESS,
-};
+use firewall_common::{CONFIG_FLAG_RPF_ENABLED, CONFIG_INDEX_FLAGS, DIRECTION_INGRESS};
 
 use crate::maps::{CONFIG, RPF_INTERNAL_V4, RPF_INTERNAL_V6};
 
@@ -22,7 +20,7 @@ pub fn rpf_active_on_ingress(direction: u8) -> bool {
         return false;
     }
     let flags = config_flags();
-    (flags & CONFIG_FLAG_RPF_ENABLED) != 0 && (flags & CONFIG_FLAG_IFACE_EXTERNAL) != 0
+    (flags & CONFIG_FLAG_RPF_ENABLED) != 0
 }
 
 #[inline(always)]
