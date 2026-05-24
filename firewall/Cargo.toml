@@ -21,7 +21,8 @@ tokio = { workspace = true, features = [
     "signal",
     "sync",
     "time",
-    "io-util"
+    "io-util",
+    "fs"
 ] }
 clap = { workspace = true, features = ["derive"] }
 

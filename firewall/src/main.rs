@@ -9,7 +9,10 @@ mod config;
 mod observability;
 mod runtime;
 
-use observability::{spawn_ringbuf_reader, DecisionLog, SharedDecisionLog};
+use observability::{
+    spawn_file_logger, spawn_ringbuf_reader, spawn_stats_poller, DecisionLog, SharedDecisionLog,
+    SharedFileLogSettings, LOG_PATH,
+};
 use runtime::{apply_config, prompt_for_interface, spawn_config_watcher};
 
 const CONFIG_PATH: &str = "config.yaml";
@@ -25,41 +28,78 @@ async fn main() -> anyhow::Result<()> {
     let mut ebpf = bpf::load_object()?;
 
     let initial_config = config::AppConfig::load(CONFIG_PATH)?;
+    let file_settings: SharedFileLogSettings =
+        Arc::new(Mutex::new(initial_config.decision_log_file_settings()));
+
+    // Apply lists/mode before programs start handling traffic.
+    bpf::apply_config_to_ebpf(&mut ebpf, &initial_config)
+        .context("failed to apply configuration to BPF maps")?;
+
+    let file_log = spawn_file_logger(file_settings.clone())
+        .context("failed to start file decision logger")?;
+
+    let file_cfg = initial_config.decision_log_file_settings();
     let decision_log: SharedDecisionLog = Arc::new(Mutex::new(DecisionLog::new(
         initial_config.decision_log_retention(),
+        file_cfg.max_memory_events,
     )));
+
+    bpf::attach_programs(&mut ebpf, &interface)
+        .context("failed to attach eBPF programs")?;
 
     let decisions_map = ebpf
         .take_map("DECISIONS")
         .ok_or_else(|| anyhow::anyhow!("DECISIONS ring buffer map not found"))?;
-    let _ringbuf_task = spawn_ringbuf_reader(decisions_map, decision_log.clone())
+    let _ringbuf_task = spawn_ringbuf_reader(decisions_map, decision_log.clone(), file_log)
         .context("failed to start decision log reader")?;
 
-    bpf::attach_programs(&mut ebpf, &interface)
-        .context("failed to attach eBPF programs")?;
+    let shared_ebpf = Arc::new(Mutex::new(ebpf));
+    let ebpf_for_summary = shared_ebpf.clone();
+    spawn_stats_poller(shared_ebpf.clone());
 
     info!(
         "Attached ingress XDP and egress TC on {interface} (inbound + outbound filtering)"
     );
 
-    let shared_ebpf = Arc::new(Mutex::new(ebpf));
+    apply_config(
+        CONFIG_PATH,
+        &shared_ebpf,
+        &decision_log,
+        &file_settings,
+    )
+    .await
+    .context("failed to sync configuration")?;
 
-    apply_config(CONFIG_PATH, &shared_ebpf, &decision_log)
-        .await
-        .context("failed to apply initial configuration")?;
-
-    spawn_config_watcher(CONFIG_PATH, shared_ebpf, decision_log.clone());
+    spawn_config_watcher(
+        CONFIG_PATH,
+        shared_ebpf,
+        decision_log.clone(),
+        file_settings,
+    );
 
     let retention_minutes = initial_config.decision_log_retention_minutes;
+    println!(
+        "Firewall running on {interface}. Drops -> {LOG_PATH} and console with flag (RUST_LOG=info)."
+    );
     info!(
-        "Decision log retention: {retention_minutes} minutes (pass/drop events in memory)"
+        "Decision logs: file={LOG_PATH} (max {} MB, {} evt/s), memory window={retention_minutes} min",
+        initial_config.decision_log_max_file_mb,
+        initial_config.decision_log_max_events_per_second,
     );
 
     println!("Waiting for Ctrl-C...");
     signal::ctrl_c().await?;
 
+    let (bpf_passes, bpf_drops) = {
+        let mut guard = ebpf_for_summary.lock().await;
+        bpf::read_packet_stats(&mut guard).unwrap_or_else(|e| {
+            log::warn!("could not read BPF packet stats on exit: {e:#}");
+            (0, 0)
+        })
+    };
+
     let log = decision_log.lock().await;
-    log.print_summary(retention_minutes);
+    log.print_summary(retention_minutes, LOG_PATH, bpf_passes, bpf_drops);
 
     println!("Exiting...");
     Ok(())

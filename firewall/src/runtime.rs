@@ -1,36 +1,57 @@
-use crate::bpf::{reload_ip_lists, set_mode};
+use crate::bpf::apply_config_to_ebpf;
 use crate::config::AppConfig;
-use crate::observability::SharedDecisionLog;
+use crate::observability::{SharedDecisionLog, SharedFileLogSettings};
+use anyhow::Context as _;
+use inquire::Select;
+use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+pub fn prompt_for_interface() -> anyhow::Result<String> {
+    let interfaces = NetworkInterface::show().context("failed to get list of network interfaces")?;
+
+    let iface_names: Vec<String> = interfaces.into_iter().map(|i| i.name).collect();
+
+    if iface_names.is_empty() {
+        return Err(anyhow::anyhow!("network interfaces are not found"));
+    }
+
+    Select::new("Choose network interface:", iface_names)
+        .with_help_message("↓ ↑ - navigation, ENTER - confirm")
+        .prompt()
+        .context("error on choosing network interface")
+}
 
 pub async fn apply_config(
     path: &str,
     shared_ebpf: &Arc<Mutex<aya::Ebpf>>,
     decision_log: &SharedDecisionLog,
+    file_settings: &SharedFileLogSettings,
 ) -> anyhow::Result<()> {
     let config = AppConfig::load(path)?;
-    let mode_value = config.get_ebpf_mode()?;
+    let file_cfg = config.decision_log_file_settings();
 
     {
         let mut log = decision_log.lock().await;
         log.set_retention(config.decision_log_retention());
+        log.set_max_entries(file_cfg.max_memory_events);
     }
 
-    let mut ebpf = shared_ebpf.lock().await;
+    *file_settings.lock().await = file_cfg;
 
-    set_mode(&mut ebpf, mode_value)?;
-    let (whitelist_count, blacklist_count) = reload_ip_lists(
-        &mut ebpf,
-        &config.get_whitelist_nets()?,
-        &config.get_blacklist_nets()?,
-    )?;
+    let mut ebpf = shared_ebpf.lock().await;
+    apply_config_to_ebpf(&mut ebpf, &config)?;
+
+    let whitelist_count = config.get_whitelist_nets()?.len();
+    let blacklist_count = config.get_blacklist_nets()?.len();
 
     println!(
-        " -> Config reloaded. Mode: {}, retention: {} min, whitelist: {}, blacklist: {}",
+        " -> Config reloaded. Mode: {}, log retention: {} min, max file: {} MB, rate: {} evt/s, whitelist: {}, blacklist: {}",
         config.mode.to_uppercase(),
         config.decision_log_retention_minutes,
+        config.decision_log_max_file_mb,
+        config.decision_log_max_events_per_second,
         whitelist_count,
         blacklist_count,
     );
@@ -42,6 +63,7 @@ pub fn spawn_config_watcher(
     path: &'static str,
     shared_ebpf: Arc<Mutex<aya::Ebpf>>,
     decision_log: SharedDecisionLog,
+    file_settings: SharedFileLogSettings,
 ) {
     tokio::task::spawn(async move {
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
@@ -67,7 +89,7 @@ pub fn spawn_config_watcher(
 
             log::info!("Config file modified. Reloading...");
 
-            match apply_config(path, &shared_ebpf, &decision_log).await {
+            match apply_config(path, &shared_ebpf, &decision_log, &file_settings).await {
                 Ok(_) => log::info!("Hot-reload successful!"),
                 Err(e) => {
                     log::error!("INVALID CONFIGURATION DETECTED: {:#}", e);

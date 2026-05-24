@@ -2,42 +2,20 @@
 
 eBPF firewall: XDP on ingress, TC on egress. Rules come from `config.yaml` with hot reload.
 
-## Project layout
-
-```
-firewall/
-├── config.yaml              # runtime configuration
-├── firewall-common/         # shared types (modes, decision events)
-│   └── src/
-│       ├── mode.rs
-│       └── event.rs
-├── firewall-ebpf/           # kernel programs
-│   └── src/
-│       ├── main.rs          # ingress_xdp, egress_tc entrypoints
-│       ├── maps.rs          # CONFIG, LPM tries, DECISIONS ring buffer
-│       └── filter/
-│           ├── verdict.rs   # pass/drop logic
-│           ├── decision.rs  # emit events to userspace
-│           └── packet.rs    # packet bounds checks
-└── firewall/                # userspace agent
-    └── src/
-        ├── main.rs
-        ├── config/          # YAML parsing
-        ├── bpf/             # load, attach, map updates
-        ├── observability/   # decision log (retention window)
-        └── runtime/         # interface picker, config watcher
-```
-
 ## Configuration
 
 | Field | Description |
 |-------|-------------|
 | `mode` | `all_pass`, `all_drop`, `default_pass`, `default_drop` |
-| `decision_log_retention_minutes` | How long to keep pass/drop events in memory (1–1440) |
+| `decision_log_retention_minutes` | In-memory window for summary on exit (1–1440) |
+| `decision_log_max_file_mb` | Max size of `/var/log/firewall-application.log` before rotation (1–1024) |
+| `decision_log_max_events_per_second` | Sustained file write rate under flood (token bucket) |
+| `decision_log_rate_burst` | Short burst above sustained rate |
+| `decision_log_max_memory_events` | In-memory cap during DDoS (≥1000) |
 | `whitelist_ips` | IPs/CIDRs that always pass (in filter modes) |
 | `blacklist_ips` | IPs/CIDRs that always drop |
 
-While running, each pass/drop is recorded via a BPF ring buffer. On **Ctrl-C**, the agent prints all events still within the retention window.
+Pass/drop events go to **`/var/log/firewall-application.log`** (append). When the file exceeds `decision_log_max_file_mb`, it is rotated to `firewall-application.log.1` (only one backup — disk use is bounded). Under flood, writes are limited by a token bucket; overflow is dropped and summarized in the log as `# suppressed: …` lines. On **Ctrl-C**, a short in-memory summary is printed; the full history is in the log file.
 
 ## Prerequisites
 
@@ -51,14 +29,14 @@ While running, each pass/drop is recorded via a BPF ring buffer. On **Ctrl-C**, 
 ## Build & Run
 
 ```shell
-cargo build --release
+cargo build
 sudo RUST_LOG=info target/release/firewall
 ```
 
 ## Cross-compiling on macOS
 
 ```shell
-CC=${ARCH}-linux-musl-gcc cargo build --package firewall --release \
+CC=${ARCH}-linux-musl-gcc cargo build --package firewall \
   --target=${ARCH}-unknown-linux-musl \
   --config=target.${ARCH}-unknown-linux-musl.linker=\"${ARCH}-linux-musl-gcc\"
 ```
