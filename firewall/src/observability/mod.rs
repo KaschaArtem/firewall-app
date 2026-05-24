@@ -2,7 +2,7 @@ use crate::config::DecisionLogFileSettings;
 use firewall_common::{
     PacketDecisionEvent, ACTION_DROP, ACTION_PASS, DIRECTION_EGRESS, DIRECTION_INGRESS,
     FAMILY_IPV4, FAMILY_IPV6, REASON_ALL_DROP, REASON_ALL_PASS, REASON_BLACKLIST, REASON_DEFAULT,
-    REASON_MALFORMED, REASON_NON_IP, REASON_WHITELIST,
+    REASON_MALFORMED, REASON_NON_IP, REASON_RPF, REASON_WHITELIST,
 };
 use std::collections::VecDeque;
 use std::fmt;
@@ -524,6 +524,7 @@ fn format_reason(reason: u8) -> &'static str {
         REASON_DEFAULT => "default_policy",
         REASON_NON_IP => "non_ip",
         REASON_MALFORMED => "malformed",
+        REASON_RPF => "rpf_spoof",
         _ => "unknown",
     }
 }

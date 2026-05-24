@@ -1,5 +1,7 @@
 //! Firewall policy: list lookups and mode handling on parsed `L3Packet` values.
 
+mod rpf;
+
 use aya_ebpf::{
     bindings::xdp_action,
     helpers::bpf_ktime_get_ns,
@@ -11,6 +13,7 @@ use firewall_common::{
     list_applies_to_direction, PacketDecisionEvent, ACTION_DROP, DIRECTION_EGRESS,
     DIRECTION_INGRESS, MODE_ALL_DROP, MODE_ALL_PASS, MODE_DEFAULT_DROP, MODE_DEFAULT_PASS,
     REASON_ALL_DROP, REASON_ALL_PASS, REASON_BLACKLIST, REASON_DEFAULT, REASON_MALFORMED,
+    REASON_RPF,
 };
 use aya_ebpf::maps::LpmTrie;
 
@@ -177,15 +180,6 @@ fn filter_packet<C>(ctx: &C, firewall_mode: u32, direction: u8) -> Result<Filter
 where
     C: PacketData + PortReader + EbpfContext,
 {
-    if firewall_mode == MODE_ALL_PASS {
-        count_pass();
-        return Ok(FilterVerdict::Pass);
-    }
-    if firewall_mode == MODE_ALL_DROP {
-        count_drop();
-        return Ok(FilterVerdict::Drop);
-    }
-
     apply_l3_outcome(firewall_mode, direction, parse_from_ethernet(ctx)?)
 }
 
@@ -197,10 +191,20 @@ fn apply_l3_outcome(
 ) -> Result<FilterVerdict, u32> {
     match outcome {
         L3ParseOutcome::Packet(L3Packet::V4(pkt)) => {
-            filter_ipv4_policy(firewall_mode, direction, pkt)
+            if rpf::ipv4_ingress_spoofed(direction, pkt.src) {
+                record_ipv4(direction, ACTION_DROP, REASON_RPF, &pkt);
+                count_drop();
+                return Ok(FilterVerdict::Drop);
+            }
+            apply_ipv4_mode(firewall_mode, direction, pkt)
         }
         L3ParseOutcome::Packet(L3Packet::V6(pkt)) => {
-            filter_ipv6_policy(firewall_mode, direction, pkt)
+            if rpf::ipv6_ingress_spoofed(direction, pkt.src) {
+                record_ipv6(direction, ACTION_DROP, REASON_RPF, &pkt);
+                count_drop();
+                return Ok(FilterVerdict::Drop);
+            }
+            apply_ipv6_mode(firewall_mode, direction, pkt)
         }
         L3ParseOutcome::NotIp => {
             count_pass();
@@ -268,6 +272,40 @@ fn ipv6_blacklisted(src: [u8; 16], dst: [u8; 16], packet_direction: u8) -> bool 
 }
 
 // --- L3 policy (extend per-family logic here) ---
+
+#[inline(always)]
+fn apply_ipv4_mode(
+    firewall_mode: u32,
+    direction: u8,
+    pkt: Ipv4Packet,
+) -> Result<FilterVerdict, u32> {
+    if firewall_mode == MODE_ALL_PASS {
+        count_pass();
+        return Ok(FilterVerdict::Pass);
+    }
+    if firewall_mode == MODE_ALL_DROP {
+        count_drop();
+        return Ok(FilterVerdict::Drop);
+    }
+    filter_ipv4_policy(firewall_mode, direction, pkt)
+}
+
+#[inline(always)]
+fn apply_ipv6_mode(
+    firewall_mode: u32,
+    direction: u8,
+    pkt: Ipv6Packet,
+) -> Result<FilterVerdict, u32> {
+    if firewall_mode == MODE_ALL_PASS {
+        count_pass();
+        return Ok(FilterVerdict::Pass);
+    }
+    if firewall_mode == MODE_ALL_DROP {
+        count_drop();
+        return Ok(FilterVerdict::Drop);
+    }
+    filter_ipv6_policy(firewall_mode, direction, pkt)
+}
 
 fn filter_ipv4_policy(
     firewall_mode: u32,

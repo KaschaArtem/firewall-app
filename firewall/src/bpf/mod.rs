@@ -3,7 +3,9 @@ use aya::maps::{Array, LpmTrie, lpm_trie::Key};
 use aya::programs::{SchedClassifier, TcAttachType, Xdp, XdpFlags, tc};
 use ipnet::IpNet;
 
-use crate::config::{AppConfig, IpListEntry};
+use crate::config::AppConfig;
+use crate::config::IpListEntry;
+use firewall_common::{CONFIG_INDEX_FLAGS, CONFIG_INDEX_MODE};
 
 pub fn raise_memlock_limit() {
     let rlim = libc::rlimit {
@@ -56,23 +58,85 @@ pub fn attach_programs(ebpf: &mut aya::Ebpf, interface: &str) -> anyhow::Result<
 }
 
 pub fn apply_config_to_ebpf(ebpf: &mut aya::Ebpf, config: &AppConfig) -> anyhow::Result<()> {
-    set_mode(ebpf, config.get_ebpf_mode()?)?;
+    set_config(ebpf, config.get_ebpf_mode()?, config.rpf_config_flags()?)?;
     reload_ip_lists(
         ebpf,
         &config.get_whitelist_entries()?,
         &config.get_blacklist_entries()?,
     )?;
+    reload_rpf_internal(ebpf, &config.get_rpf_internal_nets()?)?;
     Ok(())
 }
 
-fn set_mode(ebpf: &mut aya::Ebpf, mode: u32) -> anyhow::Result<()> {
+fn set_config(ebpf: &mut aya::Ebpf, mode: u32, flags: u32) -> anyhow::Result<()> {
     let mut config_map: Array<_, u32> = Array::try_from(
         ebpf.map_mut("CONFIG")
             .context("failed to find CONFIG map")?,
     )?;
     config_map
-        .set(0, mode, 0)
+        .set(CONFIG_INDEX_MODE, mode, 0)
         .context("failed to set mode in CONFIG map")?;
+    config_map
+        .set(CONFIG_INDEX_FLAGS, flags, 0)
+        .context("failed to set flags in CONFIG map")?;
+    Ok(())
+}
+
+fn reload_rpf_internal(ebpf: &mut aya::Ebpf, nets: &[IpNet]) -> anyhow::Result<()> {
+    reload_rpf_trie_v4(ebpf, nets)?;
+    reload_rpf_trie_v6(ebpf, nets)?;
+    Ok(())
+}
+
+fn reload_rpf_trie_v4(ebpf: &mut aya::Ebpf, nets: &[IpNet]) -> anyhow::Result<()> {
+    let map_name = "RPF_INTERNAL_V4";
+    let map_raw = ebpf
+        .map_mut(map_name)
+        .with_context(|| format!("failed to find {map_name} map"))?;
+    let mut trie: LpmTrie<_, [u8; 4], u8> =
+        LpmTrie::try_from(map_raw).with_context(|| format!("failed to cast {map_name}"))?;
+
+    let old_keys: Vec<Key<[u8; 4]>> = trie.keys().filter_map(|k| k.ok()).collect();
+    for key in old_keys {
+        trie.remove(&key)
+            .with_context(|| format!("failed to clear {map_name}"))?;
+    }
+
+    for net in nets {
+        let IpNet::V4(v4) = net else {
+            continue;
+        };
+        let key = Key::new(v4.prefix_len().into(), v4.network().octets());
+        trie.insert(&key, 1, 0)
+            .with_context(|| format!("failed to insert {v4} into {map_name}"))?;
+    }
+
+    Ok(())
+}
+
+fn reload_rpf_trie_v6(ebpf: &mut aya::Ebpf, nets: &[IpNet]) -> anyhow::Result<()> {
+    let map_name = "RPF_INTERNAL_V6";
+    let map_raw = ebpf
+        .map_mut(map_name)
+        .with_context(|| format!("failed to find {map_name} map"))?;
+    let mut trie: LpmTrie<_, [u8; 16], u8> =
+        LpmTrie::try_from(map_raw).with_context(|| format!("failed to cast {map_name}"))?;
+
+    let old_keys: Vec<Key<[u8; 16]>> = trie.keys().filter_map(|k| k.ok()).collect();
+    for key in old_keys {
+        trie.remove(&key)
+            .with_context(|| format!("failed to clear {map_name}"))?;
+    }
+
+    for net in nets {
+        let IpNet::V6(v6) = net else {
+            continue;
+        };
+        let key = Key::new(v6.prefix_len().into(), v6.network().octets());
+        trie.insert(&key, 1, 0)
+            .with_context(|| format!("failed to insert {v6} into {map_name}"))?;
+    }
+
     Ok(())
 }
 

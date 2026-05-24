@@ -5,6 +5,14 @@ pub const MODE_ALL_DROP: u32 = 1;
 pub const MODE_DEFAULT_PASS: u32 = 2;
 pub const MODE_DEFAULT_DROP: u32 = 3;
 
+/// `CONFIG` map indices.
+pub const CONFIG_INDEX_MODE: u32 = 0;
+pub const CONFIG_INDEX_FLAGS: u32 = 1;
+
+/// `CONFIG[CONFIG_INDEX_FLAGS]` bits.
+pub const CONFIG_FLAG_RPF_ENABLED: u32 = 1 << 0;
+pub const CONFIG_FLAG_IFACE_EXTERNAL: u32 = 1 << 1;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PacketDecisionEvent {
@@ -13,7 +21,6 @@ pub struct PacketDecisionEvent {
     pub family: u8,
     pub reason: u8,
     pub direction: u8,
-    /// IANA IP protocol number (6 = TCP, 17 = UDP, 1 = ICMP, …); 0 if unknown.
     pub protocol: u8,
     pub _pad: u8,
     pub src_port: u16,
@@ -28,7 +35,6 @@ pub const ACTION_DROP: u8 = 1;
 pub const DIRECTION_INGRESS: u8 = 0;
 pub const DIRECTION_EGRESS: u8 = 1;
 
-/// LPM trie value: which packet directions this list entry applies to.
 pub const LIST_DIR_INGRESS: u8 = 1 << DIRECTION_INGRESS;
 pub const LIST_DIR_EGRESS: u8 = 1 << DIRECTION_EGRESS;
 pub const LIST_DIR_BOTH: u8 = LIST_DIR_INGRESS | LIST_DIR_EGRESS;
@@ -44,8 +50,8 @@ pub const REASON_BLACKLIST: u8 = 2;
 pub const REASON_WHITELIST: u8 = 3;
 pub const REASON_DEFAULT: u8 = 4;
 pub const REASON_NON_IP: u8 = 5;
-/// Truncated header, bad version/length, or failed IPv4 header checksum.
 pub const REASON_MALFORMED: u8 = 6;
+pub const REASON_RPF: u8 = 7;
 
 pub const FAMILY_IPV4: u8 = 4;
 pub const FAMILY_IPV6: u8 = 6;
