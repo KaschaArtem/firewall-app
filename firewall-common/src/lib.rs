@@ -13,6 +13,11 @@ pub struct PacketDecisionEvent {
     pub family: u8,
     pub reason: u8,
     pub direction: u8,
+    /// IANA IP protocol number (6 = TCP, 17 = UDP, 1 = ICMP, …); 0 if unknown.
+    pub protocol: u8,
+    pub _pad: u8,
+    pub src_port: u16,
+    pub dst_port: u16,
     pub src: [u8; 16],
     pub dst: [u8; 16],
 }

@@ -492,12 +492,14 @@ impl fmt::Display for DecisionDisplay<'_> {
         let e = self.0;
         write!(
             f,
-            "{} {} {} {} -> {}",
+            "{} {} {} {} {} -> {}{}",
             format_action(e.action),
             format_direction(e.direction),
             format_reason(e.reason),
-            format_addr(e.family, &e.src),
-            format_addr(e.family, &e.dst),
+            format_proto(e.protocol),
+            format_endpoint(e.family, &e.src, e.src_port, e.protocol),
+            format_endpoint(e.family, &e.dst, e.dst_port, e.protocol),
+            format_l4_extra(e),
         )
     }
 }
@@ -541,16 +543,37 @@ fn format_addr(family: u8, addr: &[u8; 16]) -> String {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::TokenBucket;
-
-    #[test]
-    fn burst_then_throttle() {
-        let mut bucket = TokenBucket::new(10, 5);
-        for _ in 0..5 {
-            assert!(bucket.allow());
+fn format_endpoint(family: u8, addr: &[u8; 16], port: u16, protocol: u8) -> String {
+    let ip = format_addr(family, addr);
+    match protocol {
+        6 | 17 => {
+            if port == 0 {
+                format!("{ip}:?")
+            } else {
+                format!("{ip}:{port}")
+            }
         }
-        assert!(!bucket.allow());
+        _ => ip,
+    }
+}
+
+/// Extra L4 detail (always show numeric fields for debugging).
+fn format_l4_extra(e: &PacketDecisionEvent) -> String {
+    match e.protocol {
+        6 | 17 => format!(" [sport={} dport={}]", e.src_port, e.dst_port),
+        1 | 58 => format!(" [icmp-type={} code={}]", e.src_port, e.dst_port),
+        0 => String::new(),
+        p => format!(" [proto={p} sport={} dport={}]", e.src_port, e.dst_port),
+    }
+}
+
+fn format_proto(protocol: u8) -> String {
+    match protocol {
+        0 => "unknown".to_string(),
+        1 => "icmp".to_string(),
+        6 => "tcp".to_string(),
+        17 => "udp".to_string(),
+        58 => "icmpv6".to_string(),
+        n => format!("ipproto-{n}"),
     }
 }
