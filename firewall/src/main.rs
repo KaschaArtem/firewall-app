@@ -1,6 +1,7 @@
 use anyhow::Context as _;
 use log::info;
 use std::sync::Arc;
+use std::time::SystemTime;
 use tokio::signal;
 use tokio::sync::Mutex;
 
@@ -10,8 +11,8 @@ mod observability;
 mod runtime;
 
 use observability::{
-    spawn_file_logger, spawn_ringbuf_reader, spawn_stats_poller, DecisionLog, SharedDecisionLog,
-    SharedFileLogSettings, LOG_PATH,
+    format_local_timestamp, spawn_file_logger, spawn_ringbuf_reader, spawn_stats_poller,
+    DecisionLog, SharedDecisionLog, SharedFileLogSettings, LOG_PATH,
 };
 use runtime::{apply_config, prompt_for_interface, spawn_config_watcher};
 
@@ -78,8 +79,10 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let retention_minutes = initial_config.decision_log_retention_minutes;
+    let started_at = SystemTime::now();
     println!(
-        "Firewall running on {interface}. Drops -> {LOG_PATH} and console with flag (RUST_LOG=info)."
+        "Firewall started {} on {interface}. Drops -> {LOG_PATH} (RUST_LOG=info for console).",
+        format_local_timestamp(started_at),
     );
     info!(
         "Decision logs: file={LOG_PATH} (max {} MB, {} evt/s), memory window={retention_minutes} min",

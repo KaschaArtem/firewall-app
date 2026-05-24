@@ -11,11 +11,17 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, Mutex};
 
 pub const LOG_PATH: &str = "/var/log/firewall-application.log";
+
+/// Local wall time: `[DD.MM.YYYY HH:MM:SS.mmm]`
+pub fn format_local_timestamp(time: SystemTime) -> String {
+    let dt: chrono::DateTime<chrono::Local> = time.into();
+    format!("[{}]", dt.format("%d.%m.%Y %H:%M:%S%.3f"))
+}
 
 const RINGBUF_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const BACKUP_SUFFIX: &str = ".1";
@@ -187,7 +193,8 @@ fn drain_ringbuf(
         let _ = file_log.try_send(event);
 
         if event.action == ACTION_DROP {
-            log::info!("{}", format_log_line(&event));
+            let at = SystemTime::now();
+            log::info!("{}", format_log_line(&event, at));
         }
     }
 }
@@ -266,8 +273,8 @@ async fn run_file_logger(
 
     let mut file = open_log_append(&path).await?;
     let header = format!(
-        "# firewall decision log started at {}\n",
-        format_wall_time_now()
+        "# firewall decision log started {}\n",
+        format_local_timestamp(SystemTime::now())
     );
     file.write_all(header.as_bytes()).await?;
     file.flush().await?;
@@ -293,15 +300,22 @@ async fn run_file_logger(
                 let queued = queue_drops.swap(0, Ordering::Relaxed);
                 flush_suppressed(&mut file, &mut suppressed_rate, queued).await?;
 
-                file.write_all(format_log_line(&event).as_bytes()).await?;
+                let at = SystemTime::now();
+                file.write_all(format_log_line(&event, at).as_bytes()).await?;
                 file.write_all(b"\n").await?;
                 file.flush().await?;
 
                 if file.metadata().await?.len() >= cfg.max_file_bytes {
                     rotate_if_oversized(&path, cfg.max_file_bytes).await?;
                     file = open_log_append(&path).await?;
-                    let wall = format_wall_time_now();
-                    file.write_all(format!("# log rotated at {wall} (size limit)\n").as_bytes()).await?;
+                    file.write_all(
+                        format!(
+                            "# log rotated at {} (size limit)\n",
+                            format_local_timestamp(SystemTime::now())
+                        )
+                        .as_bytes(),
+                    )
+                    .await?;
                     file.flush().await?;
                 }
             }
@@ -324,9 +338,9 @@ async fn flush_suppressed(
         return Ok(());
     }
 
-    let wall = format_wall_time_now();
     let line = format!(
-        "# [{wall}] suppressed: {suppressed_rate} (rate limit), {suppressed_queue} (queue full)\n"
+        "# {} suppressed: {suppressed_rate} (rate limit), {suppressed_queue} (queue full)\n",
+        format_local_timestamp(SystemTime::now())
     );
     file.write_all(line.as_bytes()).await?;
     file.flush().await?;
@@ -458,29 +472,10 @@ impl TokenBucket {
     }
 }
 
-fn format_wall_time(ts_ns: u64) -> String {
-    let secs = ts_ns / 1_000_000_000;
-    let nanos = (ts_ns % 1_000_000_000) as u32;
-    match UNIX_EPOCH.checked_add(std::time::Duration::new(secs, nanos)) {
-        Some(t) => {
-            let since = t.duration_since(UNIX_EPOCH).unwrap_or_default();
-            format!("{}.{:03}", since.as_secs(), since.subsec_millis())
-        }
-        None => format!("{ts_ns}"),
-    }
-}
-
-fn format_wall_time_now() -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("{}.{:03}", now.as_secs(), now.subsec_millis())
-}
-
-fn format_log_line(event: &PacketDecisionEvent) -> String {
+fn format_log_line(event: &PacketDecisionEvent, at: SystemTime) -> String {
     format!(
-        "ts={} {}",
-        format_wall_time(event.ts_ns),
+        "{} {}",
+        format_local_timestamp(at),
         DecisionDisplay(event)
     )
 }
