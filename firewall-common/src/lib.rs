@@ -28,6 +28,16 @@ pub const ACTION_DROP: u8 = 1;
 pub const DIRECTION_INGRESS: u8 = 0;
 pub const DIRECTION_EGRESS: u8 = 1;
 
+/// LPM trie value: which packet directions this list entry applies to.
+pub const LIST_DIR_INGRESS: u8 = 1 << DIRECTION_INGRESS;
+pub const LIST_DIR_EGRESS: u8 = 1 << DIRECTION_EGRESS;
+pub const LIST_DIR_BOTH: u8 = LIST_DIR_INGRESS | LIST_DIR_EGRESS;
+
+#[inline(always)]
+pub const fn list_applies_to_direction(list_dirs: u8, packet_direction: u8) -> bool {
+    list_dirs & (1 << packet_direction) != 0
+}
+
 pub const REASON_ALL_PASS: u8 = 0;
 pub const REASON_ALL_DROP: u8 = 1;
 pub const REASON_BLACKLIST: u8 = 2;

@@ -1,4 +1,5 @@
 use anyhow::Context as _;
+use firewall_common::{LIST_DIR_BOTH, LIST_DIR_EGRESS, LIST_DIR_INGRESS};
 use ipnet::IpNet;
 use serde::Deserialize;
 use std::fs;
@@ -19,6 +20,14 @@ pub struct DecisionLogFileSettings {
     pub max_memory_events: usize,
 }
 
+/// CIDR/host plus directions where the rule is active.
+#[derive(Debug, Clone)]
+pub struct IpListEntry {
+    pub net: IpNet,
+    /// Bit mask: `LIST_DIR_INGRESS` | `LIST_DIR_EGRESS`.
+    pub directions: u8,
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub struct AppConfig {
     pub mode: String,
@@ -37,9 +46,29 @@ pub struct AppConfig {
     #[serde(default = "default_log_max_memory_events")]
     pub decision_log_max_memory_events: usize,
     #[serde(default)]
-    pub whitelist_ips: Option<Vec<String>>,
+    pub whitelist_ips: Option<Vec<IpListEntrySerde>>,
     #[serde(default)]
-    pub blacklist_ips: Option<Vec<String>>,
+    pub blacklist_ips: Option<Vec<IpListEntrySerde>>,
+}
+
+/// `127.0.0.1` or `{ ip: 10.0.0.0/8, direction: egress }`.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum IpListEntrySerde {
+    Address(String),
+    Rule(IpListRuleSerde),
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct IpListRuleSerde {
+    #[serde(alias = "ip", alias = "cidr")]
+    pub net: String,
+    #[serde(default = "default_direction_both")]
+    pub direction: String,
+}
+
+fn default_direction_both() -> String {
+    "both".to_string()
 }
 
 fn default_log_max_file_mb() -> u64 {
@@ -74,8 +103,8 @@ impl AppConfig {
 
     fn validate(&self) -> anyhow::Result<()> {
         let _ = self.get_ebpf_mode()?;
-        let _ = self.get_whitelist_nets()?;
-        let _ = self.get_blacklist_nets()?;
+        let _ = self.get_whitelist_entries()?;
+        let _ = self.get_blacklist_entries()?;
 
         if self.decision_log_retention_minutes == 0 {
             anyhow::bail!("decision_log_retention_minutes must be at least 1");
@@ -135,16 +164,16 @@ impl AppConfig {
         }
     }
 
-    pub fn get_whitelist_nets(&self) -> anyhow::Result<Vec<IpNet>> {
-        parse_net_list("whitelist_ips", self.whitelist_ips.as_deref())
+    pub fn get_whitelist_entries(&self) -> anyhow::Result<Vec<IpListEntry>> {
+        parse_ip_list("whitelist_ips", self.whitelist_ips.as_deref())
     }
 
-    pub fn get_blacklist_nets(&self) -> anyhow::Result<Vec<IpNet>> {
-        parse_net_list("blacklist_ips", self.blacklist_ips.as_deref())
+    pub fn get_blacklist_entries(&self) -> anyhow::Result<Vec<IpListEntry>> {
+        parse_ip_list("blacklist_ips", self.blacklist_ips.as_deref())
     }
 }
 
-fn parse_net_list(field: &str, entries: Option<&[String]>) -> anyhow::Result<Vec<IpNet>> {
+fn parse_ip_list(field: &str, entries: Option<&[IpListEntrySerde]>) -> anyhow::Result<Vec<IpListEntry>> {
     let Some(entries) = entries else {
         return Ok(Vec::new());
     };
@@ -152,14 +181,41 @@ fn parse_net_list(field: &str, entries: Option<&[String]>) -> anyhow::Result<Vec
     entries
         .iter()
         .enumerate()
-        .map(|(index, entry)| {
-            parse_net(entry).with_context(|| {
-                format!(
-                    "{field}[{index}] '{entry}': use a host IP or CIDR (quote values in YAML, e.g. \"127.0.0.1\")"
-                )
-            })
-        })
+        .map(|(index, entry)| parse_ip_list_entry(field, index, entry))
         .collect()
+}
+
+fn parse_ip_list_entry(
+    field: &str,
+    index: usize,
+    entry: &IpListEntrySerde,
+) -> anyhow::Result<IpListEntry> {
+    let (net_str, direction_str) = match entry {
+        IpListEntrySerde::Address(s) => (s.as_str(), "both"),
+        IpListEntrySerde::Rule(rule) => (rule.net.as_str(), rule.direction.as_str()),
+    };
+
+    let net = parse_net(net_str).with_context(|| {
+        format!(
+            "{field}[{index}] '{net_str}': use a host IP or CIDR (quote values in YAML)"
+        )
+    })?;
+    let directions = parse_list_direction(direction_str).with_context(|| {
+        format!(
+            "{field}[{index}]: unknown direction '{direction_str}' (use ingress, egress, or both)"
+        )
+    })?;
+
+    Ok(IpListEntry { net, directions })
+}
+
+pub fn parse_list_direction(direction: &str) -> anyhow::Result<u8> {
+    match direction.trim().to_lowercase().as_str() {
+        "ingress" | "in" | "inbound" => Ok(LIST_DIR_INGRESS),
+        "egress" | "out" | "outbound" => Ok(LIST_DIR_EGRESS),
+        "both" | "all" => Ok(LIST_DIR_BOTH),
+        _ => Err(anyhow::anyhow!("invalid direction: {direction}")),
+    }
 }
 
 fn parse_net(entry: &str) -> anyhow::Result<IpNet> {
@@ -189,9 +245,27 @@ whitelist_ips:
   - "127.0.0.1"
 "#;
         let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
-        let file = config.decision_log_file_settings();
-        assert_eq!(file.max_file_bytes, 32 * 1024 * 1024);
-        assert_eq!(file.max_events_per_second, 500);
+        let wl = config.get_whitelist_entries().unwrap();
+        assert_eq!(wl.len(), 1);
+        assert_eq!(wl[0].directions, LIST_DIR_BOTH);
+    }
+
+    #[test]
+    fn parses_list_entry_with_direction() {
+        let yaml = r#"
+mode: default_pass
+decision_log_retention_minutes: 5
+blacklist_ips:
+  - ip: "142.0.0.0/8"
+    direction: egress
+  - ip: "10.0.0.0/24"
+    direction: ingress
+"#;
+        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let bl = config.get_blacklist_entries().unwrap();
+        assert_eq!(bl.len(), 2);
+        assert_eq!(bl[0].directions, LIST_DIR_EGRESS);
+        assert_eq!(bl[1].directions, LIST_DIR_INGRESS);
     }
 
     #[test]

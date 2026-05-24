@@ -43,8 +43,8 @@ pub async fn apply_config(
     let mut ebpf = shared_ebpf.lock().await;
     apply_config_to_ebpf(&mut ebpf, &config)?;
 
-    let whitelist_count = config.get_whitelist_nets()?.len();
-    let blacklist_count = config.get_blacklist_nets()?.len();
+    let whitelist_count = config.get_whitelist_entries()?.len();
+    let blacklist_count = config.get_blacklist_entries()?.len();
 
     println!(
         " -> Config reloaded. Mode: {}, log retention: {} min, max file: {} MB, rate: {} evt/s, whitelist: {}, blacklist: {}",

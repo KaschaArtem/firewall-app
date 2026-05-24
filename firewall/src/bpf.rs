@@ -3,7 +3,7 @@ use aya::maps::{Array, LpmTrie, lpm_trie::Key};
 use aya::programs::{SchedClassifier, TcAttachType, Xdp, XdpFlags, tc};
 use ipnet::IpNet;
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, IpListEntry};
 
 pub fn raise_memlock_limit() {
     let rlim = libc::rlimit {
@@ -57,7 +57,11 @@ pub fn attach_programs(ebpf: &mut aya::Ebpf, interface: &str) -> anyhow::Result<
 
 pub fn apply_config_to_ebpf(ebpf: &mut aya::Ebpf, config: &AppConfig) -> anyhow::Result<()> {
     set_mode(ebpf, config.get_ebpf_mode()?)?;
-    reload_ip_lists(ebpf, &config.get_whitelist_nets()?, &config.get_blacklist_nets()?)?;
+    reload_ip_lists(
+        ebpf,
+        &config.get_whitelist_entries()?,
+        &config.get_blacklist_entries()?,
+    )?;
     Ok(())
 }
 
@@ -74,27 +78,31 @@ fn set_mode(ebpf: &mut aya::Ebpf, mode: u32) -> anyhow::Result<()> {
 
 fn reload_ip_lists(
     ebpf: &mut aya::Ebpf,
-    whitelist: &[IpNet],
-    blacklist: &[IpNet],
+    whitelist: &[IpListEntry],
+    blacklist: &[IpListEntry],
 ) -> anyhow::Result<()> {
     reload_lpm_trie_maps(ebpf, "WHITELIST", whitelist)?;
     reload_lpm_trie_maps(ebpf, "BLACKLIST", blacklist)?;
     Ok(())
 }
 
-fn reload_lpm_trie_maps(ebpf: &mut aya::Ebpf, base_name: &str, nets: &[IpNet]) -> anyhow::Result<()> {
+fn reload_lpm_trie_maps(
+    ebpf: &mut aya::Ebpf,
+    base_name: &str,
+    entries: &[IpListEntry],
+) -> anyhow::Result<()> {
     let (v4_map, v6_map) = match base_name {
         "WHITELIST" => ("WHITELIST_V4", "WHITELIST_V6"),
         "BLACKLIST" => ("BLACKLIST_V4", "BLACKLIST_V6"),
         _ => anyhow::bail!("unknown LPM map base name: {base_name}"),
     };
 
-    reload_lpm_trie_v4(ebpf, v4_map, nets)?;
-    reload_lpm_trie_v6(ebpf, v6_map, nets)?;
+    reload_lpm_trie_v4(ebpf, v4_map, entries)?;
+    reload_lpm_trie_v6(ebpf, v6_map, entries)?;
     Ok(())
 }
 
-fn reload_lpm_trie_v4(ebpf: &mut aya::Ebpf, map_name: &str, nets: &[IpNet]) -> anyhow::Result<()> {
+fn reload_lpm_trie_v4(ebpf: &mut aya::Ebpf, map_name: &str, entries: &[IpListEntry]) -> anyhow::Result<()> {
     let map_raw = ebpf
         .map_mut(map_name)
         .with_context(|| format!("failed to find {map_name} map"))?;
@@ -107,19 +115,19 @@ fn reload_lpm_trie_v4(ebpf: &mut aya::Ebpf, map_name: &str, nets: &[IpNet]) -> a
             .with_context(|| format!("failed to remove key from {map_name}"))?;
     }
 
-    for net in nets {
-        let IpNet::V4(v4) = net else {
+    for entry in entries {
+        let IpNet::V4(v4) = entry.net else {
             continue;
         };
         let key = Key::new(v4.prefix_len().into(), v4.network().octets());
-        trie.insert(&key, 1, 0)
+        trie.insert(&key, entry.directions, 0)
             .with_context(|| format!("failed to insert {v4} into {map_name}"))?;
     }
 
     Ok(())
 }
 
-fn reload_lpm_trie_v6(ebpf: &mut aya::Ebpf, map_name: &str, nets: &[IpNet]) -> anyhow::Result<()> {
+fn reload_lpm_trie_v6(ebpf: &mut aya::Ebpf, map_name: &str, entries: &[IpListEntry]) -> anyhow::Result<()> {
     let map_raw = ebpf
         .map_mut(map_name)
         .with_context(|| format!("failed to find {map_name} map"))?;
@@ -132,12 +140,12 @@ fn reload_lpm_trie_v6(ebpf: &mut aya::Ebpf, map_name: &str, nets: &[IpNet]) -> a
             .with_context(|| format!("failed to remove key from {map_name}"))?;
     }
 
-    for net in nets {
-        let IpNet::V6(v6) = net else {
+    for entry in entries {
+        let IpNet::V6(v6) = entry.net else {
             continue;
         };
         let key = Key::new(v6.prefix_len().into(), v6.network().octets());
-        trie.insert(&key, 1, 0)
+        trie.insert(&key, entry.directions, 0)
             .with_context(|| format!("failed to insert {v6} into {map_name}"))?;
     }
 

@@ -6,10 +6,12 @@ use aya_ebpf::{
     EbpfContext,
 };
 use firewall_common::{
-    PacketDecisionEvent, ACTION_DROP, DIRECTION_EGRESS, DIRECTION_INGRESS, FAMILY_IPV4,
-    FAMILY_IPV6, MODE_ALL_DROP, MODE_ALL_PASS, MODE_DEFAULT_DROP, MODE_DEFAULT_PASS,
-    REASON_ALL_DROP, REASON_ALL_PASS, REASON_BLACKLIST, REASON_DEFAULT,
+    list_applies_to_direction, PacketDecisionEvent, ACTION_DROP, DIRECTION_EGRESS,
+    DIRECTION_INGRESS, FAMILY_IPV4, FAMILY_IPV6, MODE_ALL_DROP, MODE_ALL_PASS,
+    MODE_DEFAULT_DROP, MODE_DEFAULT_PASS, REASON_ALL_DROP, REASON_ALL_PASS, REASON_BLACKLIST,
+    REASON_DEFAULT,
 };
+use aya_ebpf::maps::LpmTrie;
 use network_types::{
     eth::{EthHdr, EtherType},
     ip::{Ipv4Hdr, Ipv6Hdr},
@@ -380,13 +382,31 @@ where
 }
 
 #[inline(always)]
-fn ipv4_whitelisted(src: [u8; 4], dst: [u8; 4]) -> bool {
-    WHITELIST_V4.get(&Key::new(32, src)).is_some() || WHITELIST_V4.get(&Key::new(32, dst)).is_some()
+fn ipv4_in_list(map: &LpmTrie<[u8; 4], u8>, addr: [u8; 4], packet_direction: u8) -> bool {
+    if let Some(dirs) = map.get(&Key::new(32, addr)) {
+        return list_applies_to_direction(*dirs, packet_direction);
+    }
+    false
 }
 
 #[inline(always)]
-fn ipv4_blacklisted(src: [u8; 4], dst: [u8; 4]) -> bool {
-    BLACKLIST_V4.get(&Key::new(32, src)).is_some() || BLACKLIST_V4.get(&Key::new(32, dst)).is_some()
+fn ipv6_in_list(map: &LpmTrie<[u8; 16], u8>, addr: [u8; 16], packet_direction: u8) -> bool {
+    if let Some(dirs) = map.get(&Key::new(128, addr)) {
+        return list_applies_to_direction(*dirs, packet_direction);
+    }
+    false
+}
+
+#[inline(always)]
+fn ipv4_whitelisted(src: [u8; 4], dst: [u8; 4], packet_direction: u8) -> bool {
+    ipv4_in_list(&WHITELIST_V4, src, packet_direction)
+        || ipv4_in_list(&WHITELIST_V4, dst, packet_direction)
+}
+
+#[inline(always)]
+fn ipv4_blacklisted(src: [u8; 4], dst: [u8; 4], packet_direction: u8) -> bool {
+    ipv4_in_list(&BLACKLIST_V4, src, packet_direction)
+        || ipv4_in_list(&BLACKLIST_V4, dst, packet_direction)
 }
 
 fn filter_ipv4<C>(ctx: &C, firewall_mode: u32, direction: u8, l3_offset: usize) -> Result<FilterVerdict, u32>
@@ -407,7 +427,7 @@ where
 
     match (firewall_mode, direction) {
         (MODE_DEFAULT_DROP, DIRECTION_INGRESS) => {
-            if ipv4_whitelisted(src_octets, dst_octets) {
+            if ipv4_whitelisted(src_octets, dst_octets, direction) {
                 count_pass();
                 return Ok(FilterVerdict::Pass);
             }
@@ -415,7 +435,7 @@ where
             return Ok(FilterVerdict::Drop);
         }
         (MODE_DEFAULT_PASS, DIRECTION_INGRESS) | (MODE_DEFAULT_PASS, DIRECTION_EGRESS) => {
-            if ipv4_blacklisted(src_octets, dst_octets) {
+            if ipv4_blacklisted(src_octets, dst_octets, direction) {
                 record_ipv4(
                     direction,
                     ACTION_DROP,
@@ -431,7 +451,7 @@ where
             return Ok(FilterVerdict::Pass);
         }
         (MODE_DEFAULT_DROP, DIRECTION_EGRESS) => {
-            if ipv4_blacklisted(src_octets, dst_octets) {
+            if ipv4_blacklisted(src_octets, dst_octets, direction) {
                 record_ipv4(
                     direction,
                     ACTION_DROP,
@@ -443,7 +463,7 @@ where
                 count_drop();
                 return Ok(FilterVerdict::Drop);
             }
-            if ipv4_whitelisted(src_octets, dst_octets) {
+            if ipv4_whitelisted(src_octets, dst_octets, direction) {
                 count_pass();
                 return Ok(FilterVerdict::Pass);
             }
@@ -466,13 +486,15 @@ where
 }
 
 #[inline(always)]
-fn ipv6_whitelisted(src: [u8; 16], dst: [u8; 16]) -> bool {
-    WHITELIST_V6.get(&Key::new(128, src)).is_some() || WHITELIST_V6.get(&Key::new(128, dst)).is_some()
+fn ipv6_whitelisted(src: [u8; 16], dst: [u8; 16], packet_direction: u8) -> bool {
+    ipv6_in_list(&WHITELIST_V6, src, packet_direction)
+        || ipv6_in_list(&WHITELIST_V6, dst, packet_direction)
 }
 
 #[inline(always)]
-fn ipv6_blacklisted(src: [u8; 16], dst: [u8; 16]) -> bool {
-    BLACKLIST_V6.get(&Key::new(128, src)).is_some() || BLACKLIST_V6.get(&Key::new(128, dst)).is_some()
+fn ipv6_blacklisted(src: [u8; 16], dst: [u8; 16], packet_direction: u8) -> bool {
+    ipv6_in_list(&BLACKLIST_V6, src, packet_direction)
+        || ipv6_in_list(&BLACKLIST_V6, dst, packet_direction)
 }
 
 fn filter_ipv6<C>(ctx: &C, firewall_mode: u32, direction: u8, l3_offset: usize) -> Result<FilterVerdict, u32>
@@ -490,7 +512,7 @@ where
 
     match (firewall_mode, direction) {
         (MODE_DEFAULT_DROP, DIRECTION_INGRESS) => {
-            if ipv6_whitelisted(src, dst) {
+            if ipv6_whitelisted(src, dst, direction) {
                 count_pass();
                 return Ok(FilterVerdict::Pass);
             }
@@ -498,7 +520,7 @@ where
             return Ok(FilterVerdict::Drop);
         }
         (MODE_DEFAULT_PASS, DIRECTION_INGRESS) | (MODE_DEFAULT_PASS, DIRECTION_EGRESS) => {
-            if ipv6_blacklisted(src, dst) {
+            if ipv6_blacklisted(src, dst, direction) {
                 record_ipv6(
                     direction,
                     ACTION_DROP,
@@ -514,7 +536,7 @@ where
             return Ok(FilterVerdict::Pass);
         }
         (MODE_DEFAULT_DROP, DIRECTION_EGRESS) => {
-            if ipv6_blacklisted(src, dst) {
+            if ipv6_blacklisted(src, dst, direction) {
                 record_ipv6(
                     direction,
                     ACTION_DROP,
@@ -526,7 +548,7 @@ where
                 count_drop();
                 return Ok(FilterVerdict::Drop);
             }
-            if ipv6_whitelisted(src, dst) {
+            if ipv6_whitelisted(src, dst, direction) {
                 count_pass();
                 return Ok(FilterVerdict::Pass);
             }
