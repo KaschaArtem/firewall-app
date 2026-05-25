@@ -1,63 +1,61 @@
 //! Per-source IP packet rate limiting (fixed 1-second window).
 
 use aya_ebpf::{helpers::bpf_ktime_get_ns, maps::LruHashMap};
-use firewall_common::CONFIG_INDEX_RATE_PPS;
+use firewall_common::{RateLimitState, CONFIG_INDEX_RATE_PPS};
 
-use crate::maps::{RateLimitCell, CONFIG, RATE_LIMIT_V4, RATE_LIMIT_V6};
+use crate::maps::{config_u32, RATE_LIMIT_V4, RATE_LIMIT_V6};
 
-const NS_PER_SEC: u64 = 1_000_000_000;
+const WINDOW_NS: u64 = 1_000_000_000;
 
 #[inline(always)]
-fn rate_limit_per_window() -> u32 {
-    CONFIG
-        .get(CONFIG_INDEX_RATE_PPS)
-        .map(|v| *v)
-        .unwrap_or(0)
+fn limit_pps() -> u32 {
+    config_u32(CONFIG_INDEX_RATE_PPS)
 }
 
+/// Update the counter for `src` and return whether the configured limit is exceeded.
 #[inline(always)]
-fn update_and_exceeded<const N: usize>(
-    map: &LruHashMap<[u8; N], RateLimitCell>,
-    key: [u8; N],
-    now: u64,
+fn over_limit<const N: usize>(
+    map: &LruHashMap<[u8; N], RateLimitState>,
+    src: [u8; N],
     limit: u32,
+    now: u64,
 ) -> bool {
     let mut state = unsafe {
-        map.get(&key)
+        map.get(&src)
             .copied()
-            .unwrap_or(RateLimitCell {
-                window_start_ns: 0,
-                count: 0,
-            })
+            .unwrap_or(RateLimitState::default())
     };
 
-    if now.wrapping_sub(state.window_start_ns) >= NS_PER_SEC {
+    if now.wrapping_sub(state.window_start_ns) >= WINDOW_NS {
         state.window_start_ns = now;
         state.count = 1;
     } else {
         state.count = state.count.saturating_add(1);
     }
 
-    let _ = map.insert(&key, &state, 0);
+    let _ = map.insert(&src, &state, 0);
     state.count > limit
 }
 
 #[inline(always)]
-pub fn ipv4_exceeded(src: [u8; 4]) -> bool {
-    let limit = rate_limit_per_window();
+fn source_exceeded<const N: usize>(
+    map: &LruHashMap<[u8; N], RateLimitState>,
+    src: [u8; N],
+) -> bool {
+    let limit = limit_pps();
     if limit == 0 {
         return false;
     }
     let now = unsafe { bpf_ktime_get_ns() };
-    update_and_exceeded(&RATE_LIMIT_V4, src, now, limit)
+    over_limit(map, src, limit, now)
+}
+
+#[inline(always)]
+pub fn ipv4_exceeded(src: [u8; 4]) -> bool {
+    source_exceeded(&RATE_LIMIT_V4, src)
 }
 
 #[inline(always)]
 pub fn ipv6_exceeded(src: [u8; 16]) -> bool {
-    let limit = rate_limit_per_window();
-    if limit == 0 {
-        return false;
-    }
-    let now = unsafe { bpf_ktime_get_ns() };
-    update_and_exceeded(&RATE_LIMIT_V6, src, now, limit)
+    source_exceeded(&RATE_LIMIT_V6, src)
 }

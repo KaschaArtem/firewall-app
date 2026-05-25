@@ -4,14 +4,11 @@ use aya_ebpf::maps::lpm_trie::Key;
 use aya_ebpf::maps::LpmTrie;
 use firewall_common::{CONFIG_FLAG_RPF_ENABLED, CONFIG_INDEX_FLAGS, DIRECTION_INGRESS};
 
-use crate::maps::{CONFIG, RPF_INTERNAL_V4, RPF_INTERNAL_V6};
+use crate::maps::{config_u32, RPF_INTERNAL_V4, RPF_INTERNAL_V6};
 
 #[inline(always)]
-fn config_flags() -> u32 {
-    CONFIG
-        .get(CONFIG_INDEX_FLAGS)
-        .map(|f| *f)
-        .unwrap_or(0)
+fn rpf_enabled() -> bool {
+    config_u32(CONFIG_INDEX_FLAGS) & CONFIG_FLAG_RPF_ENABLED != 0
 }
 
 #[inline(always)]
@@ -19,8 +16,7 @@ pub fn rpf_active_on_ingress(direction: u8) -> bool {
     if direction != DIRECTION_INGRESS {
         return false;
     }
-    let flags = config_flags();
-    (flags & CONFIG_FLAG_RPF_ENABLED) != 0
+    rpf_enabled()
 }
 
 #[inline(always)]

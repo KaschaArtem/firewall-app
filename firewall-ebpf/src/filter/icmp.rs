@@ -5,15 +5,12 @@ use firewall_common::{
     CONFIG_INDEX_ICMP,
 };
 
-use crate::maps::CONFIG;
+use crate::maps::config_u32;
 use crate::packet::L4Info;
 
 #[inline(always)]
 fn icmp_policy() -> u32 {
-    CONFIG
-        .get(CONFIG_INDEX_ICMP)
-        .map(|p| *p)
-        .unwrap_or(0)
+    config_u32(CONFIG_INDEX_ICMP)
 }
 
 #[inline(always)]

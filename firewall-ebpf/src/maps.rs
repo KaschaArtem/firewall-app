@@ -1,24 +1,25 @@
-use aya_ebpf::{macros::map, maps::{Array, LpmTrie, LruHashMap, RingBuf}};
-
-/// LRU map value (layout must match `firewall_common::RateLimitState`).
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct RateLimitCell {
-    pub window_start_ns: u64,
-    pub count: u32,
-}
+use aya_ebpf::{
+    macros::map,
+    maps::{Array, LpmTrie, LruHashMap, RingBuf},
+};
+use firewall_common::RateLimitState;
 
 /// [0] mode, [1] flags, [2] ICMP policy, [3] rate PPS.
 #[map]
 pub static CONFIG: Array<u32> = Array::with_max_entries(4, 0);
 
-/// Per IPv4 source: packets counted in the current 1s window.
+#[inline(always)]
+pub fn config_u32(index: u32) -> u32 {
+    CONFIG.get(index).map(|v| *v).unwrap_or(0)
+}
+
+/// Per-source packet counts in a 1-second window.
 #[map]
-pub static RATE_LIMIT_V4: LruHashMap<[u8; 4], RateLimitCell> =
+pub static RATE_LIMIT_V4: LruHashMap<[u8; 4], RateLimitState> =
     LruHashMap::with_max_entries(8192, 0);
 
 #[map]
-pub static RATE_LIMIT_V6: LruHashMap<[u8; 16], RateLimitCell> =
+pub static RATE_LIMIT_V6: LruHashMap<[u8; 16], RateLimitState> =
     LruHashMap::with_max_entries(8192, 0);
 
 /// Source prefixes considered "internal" for ingress RPF on an external interface.

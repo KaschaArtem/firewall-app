@@ -1,3 +1,5 @@
+mod interfaces;
+
 use crate::bpf::apply_config_to_ebpf;
 use crate::config::AppConfig;
 use crate::observability::{SharedDecisionLog, SharedFileLogSettings};
@@ -11,13 +13,16 @@ use tokio::sync::Mutex;
 pub fn prompt_for_interface() -> anyhow::Result<String> {
     let interfaces = NetworkInterface::show().context("failed to get list of network interfaces")?;
 
-    let iface_names: Vec<String> = interfaces.into_iter().map(|i| i.name).collect();
+    let all_names: Vec<String> = interfaces.into_iter().map(|i| i.name).collect();
+    let iface_names = interfaces::list_physical_interface_names(all_names);
 
     if iface_names.is_empty() {
-        return Err(anyhow::anyhow!("network interfaces are not found"));
+        return Err(anyhow::anyhow!(
+            "no physical network interfaces found (Docker bridges, veth, and loopback are excluded)"
+        ));
     }
 
-    Select::new("Choose network interface:", iface_names)
+    Select::new("Choose physical network interface:", iface_names)
         .with_help_message("↓ ↑ - navigation, ENTER - confirm")
         .prompt()
         .context("error on choosing network interface")

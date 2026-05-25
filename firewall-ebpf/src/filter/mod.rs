@@ -1,4 +1,4 @@
-//! Firewall policy: list lookups and mode handling on parsed `L3Packet` values.
+//! Firewall policy on parsed L3 packets: pre-policy checks, then list/mode rules.
 
 mod icmp;
 mod ratelimit;
@@ -131,6 +131,51 @@ fn record_ipv6(direction: u8, action: u8, reason: u8, pkt: &Ipv6Packet) {
     );
 }
 
+// --- verdict helpers ---
+
+#[inline(always)]
+fn drop_ipv4(direction: u8, reason: u8, pkt: &Ipv4Packet) -> FilterVerdict {
+    record_ipv4(direction, ACTION_DROP, reason, pkt);
+    count_drop();
+    FilterVerdict::Drop
+}
+
+#[inline(always)]
+fn drop_ipv6(direction: u8, reason: u8, pkt: &Ipv6Packet) -> FilterVerdict {
+    record_ipv6(direction, ACTION_DROP, reason, pkt);
+    count_drop();
+    FilterVerdict::Drop
+}
+
+/// Checks applied before list/mode policy (RPF, ICMP filter, rate limit).
+#[inline(always)]
+fn pre_policy_ipv4(direction: u8, pkt: &Ipv4Packet) -> Option<FilterVerdict> {
+    if rpf::ipv4_ingress_spoofed(direction, pkt.src) {
+        return Some(drop_ipv4(direction, REASON_RPF, pkt));
+    }
+    if icmp::should_drop(&pkt.l4) {
+        return Some(drop_ipv4(direction, REASON_ICMP_FILTER, pkt));
+    }
+    if ratelimit::ipv4_exceeded(pkt.src) {
+        return Some(drop_ipv4(direction, REASON_RATE_LIMIT, pkt));
+    }
+    None
+}
+
+#[inline(always)]
+fn pre_policy_ipv6(direction: u8, pkt: &Ipv6Packet) -> Option<FilterVerdict> {
+    if rpf::ipv6_ingress_spoofed(direction, pkt.src) {
+        return Some(drop_ipv6(direction, REASON_RPF, pkt));
+    }
+    if icmp::should_drop(&pkt.l4) {
+        return Some(drop_ipv6(direction, REASON_ICMP_FILTER, pkt));
+    }
+    if ratelimit::ipv6_exceeded(pkt.src) {
+        return Some(drop_ipv6(direction, REASON_RATE_LIMIT, pkt));
+    }
+    None
+}
+
 // --- filter entry points ---
 
 #[derive(PartialEq, Eq)]
@@ -195,38 +240,14 @@ fn apply_l3_outcome(
 ) -> Result<FilterVerdict, u32> {
     match outcome {
         L3ParseOutcome::Packet(L3Packet::V4(pkt)) => {
-            if rpf::ipv4_ingress_spoofed(direction, pkt.src) {
-                record_ipv4(direction, ACTION_DROP, REASON_RPF, &pkt);
-                count_drop();
-                return Ok(FilterVerdict::Drop);
-            }
-            if icmp::should_drop(&pkt.l4) {
-                record_ipv4(direction, ACTION_DROP, REASON_ICMP_FILTER, &pkt);
-                count_drop();
-                return Ok(FilterVerdict::Drop);
-            }
-            if ratelimit::ipv4_exceeded(pkt.src) {
-                record_ipv4(direction, ACTION_DROP, REASON_RATE_LIMIT, &pkt);
-                count_drop();
-                return Ok(FilterVerdict::Drop);
+            if let Some(verdict) = pre_policy_ipv4(direction, &pkt) {
+                return Ok(verdict);
             }
             apply_ipv4_mode(firewall_mode, direction, pkt)
         }
         L3ParseOutcome::Packet(L3Packet::V6(pkt)) => {
-            if rpf::ipv6_ingress_spoofed(direction, pkt.src) {
-                record_ipv6(direction, ACTION_DROP, REASON_RPF, &pkt);
-                count_drop();
-                return Ok(FilterVerdict::Drop);
-            }
-            if icmp::should_drop(&pkt.l4) {
-                record_ipv6(direction, ACTION_DROP, REASON_ICMP_FILTER, &pkt);
-                count_drop();
-                return Ok(FilterVerdict::Drop);
-            }
-            if ratelimit::ipv6_exceeded(pkt.src) {
-                record_ipv6(direction, ACTION_DROP, REASON_RATE_LIMIT, &pkt);
-                count_drop();
-                return Ok(FilterVerdict::Drop);
+            if let Some(verdict) = pre_policy_ipv6(direction, &pkt) {
+                return Ok(verdict);
             }
             apply_ipv6_mode(firewall_mode, direction, pkt)
         }
@@ -350,26 +371,20 @@ fn filter_ipv4_policy(
         }
         (MODE_DEFAULT_PASS, DIRECTION_INGRESS) | (MODE_DEFAULT_PASS, DIRECTION_EGRESS) => {
             if ipv4_blacklisted(src, dst, direction) {
-                record_ipv4(direction, ACTION_DROP, REASON_BLACKLIST, &pkt);
-                count_drop();
-                return Ok(FilterVerdict::Drop);
+                return Ok(drop_ipv4(direction, REASON_BLACKLIST, &pkt));
             }
             count_pass();
             return Ok(FilterVerdict::Pass);
         }
         (MODE_DEFAULT_DROP, DIRECTION_EGRESS) => {
             if ipv4_blacklisted(src, dst, direction) {
-                record_ipv4(direction, ACTION_DROP, REASON_BLACKLIST, &pkt);
-                count_drop();
-                return Ok(FilterVerdict::Drop);
+                return Ok(drop_ipv4(direction, REASON_BLACKLIST, &pkt));
             }
             if ipv4_whitelisted(src, dst, direction) {
                 count_pass();
                 return Ok(FilterVerdict::Pass);
             }
-            record_ipv4(direction, ACTION_DROP, REASON_DEFAULT, &pkt);
-            count_drop();
-            return Ok(FilterVerdict::Drop);
+            return Ok(drop_ipv4(direction, REASON_DEFAULT, &pkt));
         }
         _ => {}
     }
@@ -397,26 +412,20 @@ fn filter_ipv6_policy(
         }
         (MODE_DEFAULT_PASS, DIRECTION_INGRESS) | (MODE_DEFAULT_PASS, DIRECTION_EGRESS) => {
             if ipv6_blacklisted(src, dst, direction) {
-                record_ipv6(direction, ACTION_DROP, REASON_BLACKLIST, &pkt);
-                count_drop();
-                return Ok(FilterVerdict::Drop);
+                return Ok(drop_ipv6(direction, REASON_BLACKLIST, &pkt));
             }
             count_pass();
             return Ok(FilterVerdict::Pass);
         }
         (MODE_DEFAULT_DROP, DIRECTION_EGRESS) => {
             if ipv6_blacklisted(src, dst, direction) {
-                record_ipv6(direction, ACTION_DROP, REASON_BLACKLIST, &pkt);
-                count_drop();
-                return Ok(FilterVerdict::Drop);
+                return Ok(drop_ipv6(direction, REASON_BLACKLIST, &pkt));
             }
             if ipv6_whitelisted(src, dst, direction) {
                 count_pass();
                 return Ok(FilterVerdict::Pass);
             }
-            record_ipv6(direction, ACTION_DROP, REASON_DEFAULT, &pkt);
-            count_drop();
-            return Ok(FilterVerdict::Drop);
+            return Ok(drop_ipv6(direction, REASON_DEFAULT, &pkt));
         }
         _ => {}
     }
