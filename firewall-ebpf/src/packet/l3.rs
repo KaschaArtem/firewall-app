@@ -7,6 +7,7 @@ use network_types::{
     ip::{Ipv4Hdr, Ipv6Hdr},
 };
 
+use super::icmp::classify_icmp;
 use super::{ptr_at, PacketData, PortReader};
 
 const IPPROTO_ICMP: u8 = 1;
@@ -19,6 +20,9 @@ const IPPROTO_ICMPV6: u8 = 58;
 #[derive(Clone, Copy, Default)]
 pub struct L4Info {
     pub protocol: u8,
+    pub icmp_type: u8,
+    pub icmp_code: u8,
+    pub icmp_class: u8,
     pub src_port: u16,
     pub dst_port: u16,
 }
@@ -148,8 +152,7 @@ fn read_l4<C: PacketData + PortReader>(ctx: &C, l4_offset: usize, proto: u8) -> 
     if !ctx.uses_skb_load() && !l4_fits(ctx, l4_offset, proto) {
         return L4Info {
             protocol: proto,
-            src_port: 0,
-            dst_port: 0,
+            ..L4Info::default()
         };
     }
 
@@ -158,16 +161,22 @@ fn read_l4<C: PacketData + PortReader>(ctx: &C, l4_offset: usize, proto: u8) -> 
             protocol: proto,
             src_port: ctx.read_u16_be(l4_offset).unwrap_or(0),
             dst_port: ctx.read_u16_be(l4_offset + 2).unwrap_or(0),
+            ..L4Info::default()
         },
-        IPPROTO_ICMP | IPPROTO_ICMPV6 => L4Info {
-            protocol: proto,
-            src_port: ctx.read_u8(l4_offset).unwrap_or(0) as u16,
-            dst_port: ctx.read_u8(l4_offset + 1).unwrap_or(0) as u16,
-        },
+        IPPROTO_ICMP | IPPROTO_ICMPV6 => {
+            let icmp_type = ctx.read_u8(l4_offset).unwrap_or(0);
+            let icmp_code = ctx.read_u8(l4_offset + 1).unwrap_or(0);
+            L4Info {
+                protocol: proto,
+                icmp_type,
+                icmp_code,
+                icmp_class: classify_icmp(proto, icmp_type, icmp_code),
+                ..L4Info::default()
+            }
+        }
         _ => L4Info {
             protocol: proto,
-            src_port: 0,
-            dst_port: 0,
+            ..L4Info::default()
         },
     }
 }

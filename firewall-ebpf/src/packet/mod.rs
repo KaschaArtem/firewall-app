@@ -3,6 +3,7 @@
 use aya_ebpf::programs::{TcContext, XdpContext};
 use core::mem;
 
+pub mod icmp;
 pub mod l3;
 
 pub use l3::{

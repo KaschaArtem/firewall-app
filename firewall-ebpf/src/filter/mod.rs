@@ -1,5 +1,6 @@
 //! Firewall policy: list lookups and mode handling on parsed `L3Packet` values.
 
+mod icmp;
 mod rpf;
 
 use aya_ebpf::{
@@ -12,8 +13,8 @@ use aya_ebpf::{
 use firewall_common::{
     list_applies_to_direction, PacketDecisionEvent, ACTION_DROP, DIRECTION_EGRESS,
     DIRECTION_INGRESS, MODE_ALL_DROP, MODE_ALL_PASS, MODE_DEFAULT_DROP, MODE_DEFAULT_PASS,
-    REASON_ALL_DROP, REASON_ALL_PASS, REASON_BLACKLIST, REASON_DEFAULT, REASON_MALFORMED,
-    REASON_RPF,
+    REASON_ALL_DROP, REASON_ALL_PASS, REASON_BLACKLIST, REASON_DEFAULT, REASON_ICMP_FILTER,
+    REASON_MALFORMED, REASON_RPF,
 };
 use aya_ebpf::maps::LpmTrie;
 
@@ -81,7 +82,9 @@ fn record_decision(
         reason,
         direction,
         protocol: l4.protocol,
-        _pad: 0,
+        icmp_type: l4.icmp_type,
+        icmp_code: l4.icmp_code,
+        icmp_class: l4.icmp_class,
         src_port: l4.src_port,
         dst_port: l4.dst_port,
         src,
@@ -196,11 +199,21 @@ fn apply_l3_outcome(
                 count_drop();
                 return Ok(FilterVerdict::Drop);
             }
+            if icmp::should_drop(&pkt.l4) {
+                record_ipv4(direction, ACTION_DROP, REASON_ICMP_FILTER, &pkt);
+                count_drop();
+                return Ok(FilterVerdict::Drop);
+            }
             apply_ipv4_mode(firewall_mode, direction, pkt)
         }
         L3ParseOutcome::Packet(L3Packet::V6(pkt)) => {
             if rpf::ipv6_ingress_spoofed(direction, pkt.src) {
                 record_ipv6(direction, ACTION_DROP, REASON_RPF, &pkt);
+                count_drop();
+                return Ok(FilterVerdict::Drop);
+            }
+            if icmp::should_drop(&pkt.l4) {
+                record_ipv6(direction, ACTION_DROP, REASON_ICMP_FILTER, &pkt);
                 count_drop();
                 return Ok(FilterVerdict::Drop);
             }

@@ -2,7 +2,8 @@ use crate::config::DecisionLogFileSettings;
 use firewall_common::{
     PacketDecisionEvent, ACTION_DROP, ACTION_PASS, DIRECTION_EGRESS, DIRECTION_INGRESS,
     FAMILY_IPV4, FAMILY_IPV6, REASON_ALL_DROP, REASON_ALL_PASS, REASON_BLACKLIST, REASON_DEFAULT,
-    REASON_MALFORMED, REASON_NON_IP, REASON_RPF, REASON_WHITELIST,
+    ICMP_CLASS_CONTROL, ICMP_CLASS_ECHO, ICMP_CLASS_OTHER, ICMP_CLASS_TRACEROUTE,
+    REASON_ICMP_FILTER, REASON_MALFORMED, REASON_NON_IP, REASON_RPF, REASON_WHITELIST,
 };
 use std::collections::VecDeque;
 use std::fmt;
@@ -525,6 +526,7 @@ fn format_reason(reason: u8) -> &'static str {
         REASON_NON_IP => "non_ip",
         REASON_MALFORMED => "malformed",
         REASON_RPF => "rpf_spoof",
+        REASON_ICMP_FILTER => "icmp_filter",
         _ => "unknown",
     }
 }
@@ -558,9 +560,24 @@ fn format_endpoint(family: u8, addr: &[u8; 16], port: u16, protocol: u8) -> Stri
 fn format_l4_extra(e: &PacketDecisionEvent) -> String {
     match e.protocol {
         6 | 17 => format!(" [sport={} dport={}]", e.src_port, e.dst_port),
-        1 | 58 => format!(" [icmp-type={} code={}]", e.src_port, e.dst_port),
+        1 | 58 => format!(
+            " [icmp-type={} code={} class={}]",
+            e.icmp_type,
+            e.icmp_code,
+            format_icmp_class(e.icmp_class)
+        ),
         0 => String::new(),
         p => format!(" [proto={p} sport={} dport={}]", e.src_port, e.dst_port),
+    }
+}
+
+fn format_icmp_class(class: u8) -> &'static str {
+    match class {
+        ICMP_CLASS_ECHO => "echo",
+        ICMP_CLASS_TRACEROUTE => "traceroute",
+        ICMP_CLASS_CONTROL => "control",
+        ICMP_CLASS_OTHER => "other",
+        _ => "none",
     }
 }
 

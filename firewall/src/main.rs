@@ -93,6 +93,15 @@ async fn main() -> anyhow::Result<()> {
         let nets = initial_config.get_rpf_internal_nets().unwrap_or_default();
         info!("RPF enabled ({} internal prefix(es) on ingress)", nets.len());
     }
+    if initial_config.icmp.enabled {
+        info!(
+            "ICMP filter: echo={}, traceroute={}, control={}, other={}",
+            initial_config.icmp.echo,
+            initial_config.icmp.traceroute,
+            initial_config.icmp.control,
+            initial_config.icmp.other,
+        );
+    }
 
     println!("Waiting for Ctrl-C...");
     signal::ctrl_c().await?;

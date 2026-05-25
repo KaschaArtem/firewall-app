@@ -2,7 +2,7 @@ use aya_ebpf::{macros::map, maps::{Array, LpmTrie, RingBuf}};
 
 /// [0] firewall mode, [1] flags (`CONFIG_FLAG_*` from firewall-common).
 #[map]
-pub static CONFIG: Array<u32> = Array::with_max_entries(2, 0);
+pub static CONFIG: Array<u32> = Array::with_max_entries(3, 0);
 
 /// Source prefixes considered "internal" for ingress RPF on an external interface.
 #[map]

@@ -8,6 +8,8 @@ pub const MODE_DEFAULT_DROP: u32 = 3;
 /// `CONFIG` map indices.
 pub const CONFIG_INDEX_MODE: u32 = 0;
 pub const CONFIG_INDEX_FLAGS: u32 = 1;
+/// Per-class pass/drop bits; see `ICMP_POLICY_*`.
+pub const CONFIG_INDEX_ICMP: u32 = 2;
 
 /// `CONFIG[CONFIG_INDEX_FLAGS]` bits.
 pub const CONFIG_FLAG_RPF_ENABLED: u32 = 1 << 0;
@@ -21,7 +23,9 @@ pub struct PacketDecisionEvent {
     pub reason: u8,
     pub direction: u8,
     pub protocol: u8,
-    pub _pad: u8,
+    pub icmp_type: u8,
+    pub icmp_code: u8,
+    pub icmp_class: u8,
     pub src_port: u16,
     pub dst_port: u16,
     pub src: [u8; 16],
@@ -51,6 +55,22 @@ pub const REASON_DEFAULT: u8 = 4;
 pub const REASON_NON_IP: u8 = 5;
 pub const REASON_MALFORMED: u8 = 6;
 pub const REASON_RPF: u8 = 7;
+pub const REASON_ICMP_FILTER: u8 = 8;
+
+pub const ICMP_CLASS_NONE: u8 = 0;
+pub const ICMP_CLASS_ECHO: u8 = 1;
+pub const ICMP_CLASS_TRACEROUTE: u8 = 2;
+pub const ICMP_CLASS_CONTROL: u8 = 3;
+pub const ICMP_CLASS_OTHER: u8 = 4;
+
+pub const ICMP_POLICY_ENABLED: u32 = 1 << 31;
+pub const ICMP_POLICY_ACT_DROP: u32 = 1;
+pub const ICMP_POLICY_ACT_PASS: u32 = 0;
+
+#[inline(always)]
+pub const fn icmp_policy_shift(class: u8) -> u32 {
+    (class.saturating_sub(1) as u32) * 2
+}
 
 pub const FAMILY_IPV4: u8 = 4;
 pub const FAMILY_IPV6: u8 = 6;

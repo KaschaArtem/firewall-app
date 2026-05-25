@@ -1,5 +1,9 @@
 use anyhow::Context as _;
-use firewall_common::{CONFIG_FLAG_RPF_ENABLED, LIST_DIR_BOTH, LIST_DIR_EGRESS, LIST_DIR_INGRESS};
+use firewall_common::{
+    icmp_policy_shift, CONFIG_FLAG_RPF_ENABLED, ICMP_CLASS_CONTROL, ICMP_CLASS_ECHO,
+    ICMP_CLASS_OTHER, ICMP_CLASS_TRACEROUTE, ICMP_POLICY_ACT_DROP, ICMP_POLICY_ENABLED,
+    LIST_DIR_BOTH, LIST_DIR_EGRESS, LIST_DIR_INGRESS,
+};
 use ipnet::IpNet;
 use serde::Deserialize;
 use std::fs;
@@ -52,6 +56,43 @@ pub struct AppConfig {
     /// Ingress anti-spoofing on an external interface (RPF / BCP38-style).
     #[serde(default)]
     pub rpf: RpfConfig,
+    /// Per-class ICMP filtering (echo / traceroute / control).
+    #[serde(default)]
+    pub icmp: IcmpFilterConfig,
+}
+
+/// ICMP class policy: `pass` or `drop` per message category.
+#[derive(Deserialize, Debug, Clone)]
+pub struct IcmpFilterConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Echo Request (8) / Echo Reply (0), ICMPv6 128/129.
+    #[serde(default = "default_icmp_pass")]
+    pub echo: String,
+    /// Time Exceeded, trace-related Dest Unreachable, etc.
+    #[serde(default = "default_icmp_pass")]
+    pub traceroute: String,
+    /// Redirect, admin unreachable, parameter problem, etc.
+    #[serde(default = "default_icmp_pass")]
+    pub control: String,
+    #[serde(default = "default_icmp_pass")]
+    pub other: String,
+}
+
+impl Default for IcmpFilterConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            echo: default_icmp_pass(),
+            traceroute: default_icmp_pass(),
+            control: default_icmp_pass(),
+            other: default_icmp_pass(),
+        }
+    }
+}
+
+fn default_icmp_pass() -> String {
+    "pass".to_string()
 }
 
 /// Reverse-path check: drop ingress packets whose source is in an internal prefix.
@@ -120,6 +161,7 @@ impl AppConfig {
         let _ = self.get_blacklist_entries()?;
         let _ = self.get_rpf_internal_nets()?;
         self.validate_rpf()?;
+        self.validate_icmp()?;
 
         if self.decision_log_retention_minutes == 0 {
             anyhow::bail!("decision_log_retention_minutes must be at least 1");
@@ -195,6 +237,30 @@ impl AppConfig {
         }
     }
 
+    pub fn icmp_policy_word(&self) -> anyhow::Result<u32> {
+        if !self.icmp.enabled {
+            return Ok(0);
+        }
+
+        let mut word = ICMP_POLICY_ENABLED;
+        set_icmp_class_policy(&mut word, ICMP_CLASS_ECHO, &self.icmp.echo)?;
+        set_icmp_class_policy(&mut word, ICMP_CLASS_TRACEROUTE, &self.icmp.traceroute)?;
+        set_icmp_class_policy(&mut word, ICMP_CLASS_CONTROL, &self.icmp.control)?;
+        set_icmp_class_policy(&mut word, ICMP_CLASS_OTHER, &self.icmp.other)?;
+        Ok(word)
+    }
+
+    fn validate_icmp(&self) -> anyhow::Result<()> {
+        if !self.icmp.enabled {
+            return Ok(());
+        }
+        parse_icmp_action(&self.icmp.echo, "icmp.echo")?;
+        parse_icmp_action(&self.icmp.traceroute, "icmp.traceroute")?;
+        parse_icmp_action(&self.icmp.control, "icmp.control")?;
+        parse_icmp_action(&self.icmp.other, "icmp.other")?;
+        Ok(())
+    }
+
     pub fn get_rpf_internal_nets(&self) -> anyhow::Result<Vec<IpNet>> {
         if !self.rpf.enabled {
             return Ok(Vec::new());
@@ -219,6 +285,23 @@ impl AppConfig {
             let _ = self.get_rpf_internal_nets()?;
         }
         Ok(())
+    }
+}
+
+fn set_icmp_class_policy(word: &mut u32, class: u8, action: &str) -> anyhow::Result<()> {
+    if parse_icmp_action(action, "icmp")? {
+        *word |= ICMP_POLICY_ACT_DROP << icmp_policy_shift(class);
+    }
+    Ok(())
+}
+
+fn parse_icmp_action(action: &str, field: &str) -> anyhow::Result<bool> {
+    match action.trim().to_lowercase().as_str() {
+        "pass" | "allow" => Ok(false),
+        "drop" | "deny" | "block" => Ok(true),
+        other => Err(anyhow::anyhow!(
+            "{field}: unknown action '{other}' (use pass or drop)"
+        )),
     }
 }
 
@@ -346,6 +429,23 @@ rpf:
         assert_ne!(config.rpf_config_flags() & CONFIG_FLAG_RPF_ENABLED, 0);
         let nets = config.get_rpf_internal_nets().unwrap();
         assert_eq!(nets.len(), 1);
+    }
+
+    #[test]
+    fn parses_icmp_filter() {
+        let yaml = r#"
+mode: default_pass
+decision_log_retention_minutes: 5
+icmp:
+  enabled: true
+  echo: pass
+  traceroute: drop
+"#;
+        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        let word = config.icmp_policy_word().unwrap();
+        assert_ne!(word & ICMP_POLICY_ENABLED, 0);
+        assert_ne!(word & (ICMP_POLICY_ACT_DROP << icmp_policy_shift(ICMP_CLASS_TRACEROUTE)), 0);
+        assert_eq!(word & (ICMP_POLICY_ACT_DROP << icmp_policy_shift(ICMP_CLASS_ECHO)), 0);
     }
 
     #[test]
