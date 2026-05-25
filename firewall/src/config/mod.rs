@@ -59,6 +59,31 @@ pub struct AppConfig {
     /// Per-class ICMP filtering (echo / traceroute / control).
     #[serde(default)]
     pub icmp: IcmpFilterConfig,
+    /// Per source-IP L3 packet rate limit (ingress + egress).
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
+}
+
+/// Limit packets per source IP address (1-second sliding window in eBPF).
+#[derive(Deserialize, Debug, Clone)]
+pub struct RateLimitConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_rate_pps")]
+    pub packets_per_second: u32,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            packets_per_second: default_rate_pps(),
+        }
+    }
+}
+
+fn default_rate_pps() -> u32 {
+    100
 }
 
 /// ICMP class policy: `pass` or `drop` per message category.
@@ -162,6 +187,7 @@ impl AppConfig {
         let _ = self.get_rpf_internal_nets()?;
         self.validate_rpf()?;
         self.validate_icmp()?;
+        self.validate_rate_limit()?;
 
         if self.decision_log_retention_minutes == 0 {
             anyhow::bail!("decision_log_retention_minutes must be at least 1");
@@ -235,6 +261,27 @@ impl AppConfig {
         } else {
             0
         }
+    }
+
+    pub fn rate_limit_pps(&self) -> u32 {
+        if self.rate_limit.enabled {
+            self.rate_limit.packets_per_second
+        } else {
+            0
+        }
+    }
+
+    fn validate_rate_limit(&self) -> anyhow::Result<()> {
+        if !self.rate_limit.enabled {
+            return Ok(());
+        }
+        if self.rate_limit.packets_per_second == 0 {
+            anyhow::bail!("rate_limit.packets_per_second must be at least 1 when enabled");
+        }
+        if self.rate_limit.packets_per_second > 1_000_000 {
+            anyhow::bail!("rate_limit.packets_per_second must be at most 1000000");
+        }
+        Ok(())
     }
 
     pub fn icmp_policy_word(&self) -> anyhow::Result<u32> {
@@ -429,6 +476,19 @@ rpf:
         assert_ne!(config.rpf_config_flags() & CONFIG_FLAG_RPF_ENABLED, 0);
         let nets = config.get_rpf_internal_nets().unwrap();
         assert_eq!(nets.len(), 1);
+    }
+
+    #[test]
+    fn parses_rate_limit() {
+        let yaml = r#"
+mode: default_pass
+decision_log_retention_minutes: 5
+rate_limit:
+  enabled: true
+  packets_per_second: 50
+"#;
+        let config: AppConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.rate_limit_pps(), 50);
     }
 
     #[test]

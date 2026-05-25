@@ -10,6 +10,8 @@ pub const CONFIG_INDEX_MODE: u32 = 0;
 pub const CONFIG_INDEX_FLAGS: u32 = 1;
 /// Per-class pass/drop bits; see `ICMP_POLICY_*`.
 pub const CONFIG_INDEX_ICMP: u32 = 2;
+/// Max packets per source IP per 1s window (0 = rate limit off).
+pub const CONFIG_INDEX_RATE_PPS: u32 = 3;
 
 /// `CONFIG[CONFIG_INDEX_FLAGS]` bits.
 pub const CONFIG_FLAG_RPF_ENABLED: u32 = 1 << 0;
@@ -56,6 +58,15 @@ pub const REASON_NON_IP: u8 = 5;
 pub const REASON_MALFORMED: u8 = 6;
 pub const REASON_RPF: u8 = 7;
 pub const REASON_ICMP_FILTER: u8 = 8;
+pub const REASON_RATE_LIMIT: u8 = 9;
+
+/// Per-source packet count state in `RATE_LIMIT_*` LRU maps.
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct RateLimitState {
+    pub window_start_ns: u64,
+    pub count: u32,
+}
 
 pub const ICMP_CLASS_NONE: u8 = 0;
 pub const ICMP_CLASS_ECHO: u8 = 1;
@@ -77,6 +88,9 @@ pub const FAMILY_IPV6: u8 = 6;
 
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for PacketDecisionEvent {}
+
+#[cfg(feature = "user")]
+unsafe impl aya::Pod for RateLimitState {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(C)]

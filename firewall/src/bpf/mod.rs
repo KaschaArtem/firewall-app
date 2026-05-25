@@ -5,7 +5,7 @@ use ipnet::IpNet;
 
 use crate::config::AppConfig;
 use crate::config::IpListEntry;
-use firewall_common::{CONFIG_INDEX_FLAGS, CONFIG_INDEX_ICMP, CONFIG_INDEX_MODE};
+use firewall_common::{CONFIG_INDEX_FLAGS, CONFIG_INDEX_ICMP, CONFIG_INDEX_MODE, CONFIG_INDEX_RATE_PPS};
 
 pub fn raise_memlock_limit() {
     let rlim = libc::rlimit {
@@ -63,6 +63,7 @@ pub fn apply_config_to_ebpf(ebpf: &mut aya::Ebpf, config: &AppConfig) -> anyhow:
         config.get_ebpf_mode()?,
         config.rpf_config_flags(),
         config.icmp_policy_word()?,
+        config.rate_limit_pps(),
     )?;
     reload_ip_lists(
         ebpf,
@@ -73,7 +74,13 @@ pub fn apply_config_to_ebpf(ebpf: &mut aya::Ebpf, config: &AppConfig) -> anyhow:
     Ok(())
 }
 
-fn set_config(ebpf: &mut aya::Ebpf, mode: u32, flags: u32, icmp_policy: u32) -> anyhow::Result<()> {
+fn set_config(
+    ebpf: &mut aya::Ebpf,
+    mode: u32,
+    flags: u32,
+    icmp_policy: u32,
+    rate_pps: u32,
+) -> anyhow::Result<()> {
     let mut config_map: Array<_, u32> = Array::try_from(
         ebpf.map_mut("CONFIG")
             .context("failed to find CONFIG map")?,
@@ -87,6 +94,9 @@ fn set_config(ebpf: &mut aya::Ebpf, mode: u32, flags: u32, icmp_policy: u32) -> 
     config_map
         .set(CONFIG_INDEX_ICMP, icmp_policy, 0)
         .context("failed to set ICMP policy in CONFIG map")?;
+    config_map
+        .set(CONFIG_INDEX_RATE_PPS, rate_pps, 0)
+        .context("failed to set rate PPS in CONFIG map")?;
     Ok(())
 }
 

@@ -102,6 +102,12 @@ async fn main() -> anyhow::Result<()> {
             initial_config.icmp.other,
         );
     }
+    if initial_config.rate_limit.enabled {
+        info!(
+            "Rate limit: {} packets/s per source IP",
+            initial_config.rate_limit.packets_per_second,
+        );
+    }
 
     println!("Waiting for Ctrl-C...");
     signal::ctrl_c().await?;

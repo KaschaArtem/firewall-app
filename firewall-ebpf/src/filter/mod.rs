@@ -1,6 +1,7 @@
 //! Firewall policy: list lookups and mode handling on parsed `L3Packet` values.
 
 mod icmp;
+mod ratelimit;
 mod rpf;
 
 use aya_ebpf::{
@@ -14,7 +15,7 @@ use firewall_common::{
     list_applies_to_direction, PacketDecisionEvent, ACTION_DROP, DIRECTION_EGRESS,
     DIRECTION_INGRESS, MODE_ALL_DROP, MODE_ALL_PASS, MODE_DEFAULT_DROP, MODE_DEFAULT_PASS,
     REASON_ALL_DROP, REASON_ALL_PASS, REASON_BLACKLIST, REASON_DEFAULT, REASON_ICMP_FILTER,
-    REASON_MALFORMED, REASON_RPF,
+    REASON_MALFORMED, REASON_RATE_LIMIT, REASON_RPF,
 };
 use aya_ebpf::maps::LpmTrie;
 
@@ -204,6 +205,11 @@ fn apply_l3_outcome(
                 count_drop();
                 return Ok(FilterVerdict::Drop);
             }
+            if ratelimit::ipv4_exceeded(pkt.src) {
+                record_ipv4(direction, ACTION_DROP, REASON_RATE_LIMIT, &pkt);
+                count_drop();
+                return Ok(FilterVerdict::Drop);
+            }
             apply_ipv4_mode(firewall_mode, direction, pkt)
         }
         L3ParseOutcome::Packet(L3Packet::V6(pkt)) => {
@@ -214,6 +220,11 @@ fn apply_l3_outcome(
             }
             if icmp::should_drop(&pkt.l4) {
                 record_ipv6(direction, ACTION_DROP, REASON_ICMP_FILTER, &pkt);
+                count_drop();
+                return Ok(FilterVerdict::Drop);
+            }
+            if ratelimit::ipv6_exceeded(pkt.src) {
+                record_ipv6(direction, ACTION_DROP, REASON_RATE_LIMIT, &pkt);
                 count_drop();
                 return Ok(FilterVerdict::Drop);
             }
