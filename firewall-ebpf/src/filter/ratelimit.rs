@@ -1,4 +1,4 @@
-//! Per-source IP packet rate limiting (fixed 1-second window).
+//! Per-source IP packet rate limiting.
 
 use aya_ebpf::{helpers::bpf_ktime_get_ns, maps::LruHashMap};
 use firewall_common::{RateLimitState, CONFIG_INDEX_RATE_PPS};
@@ -12,7 +12,6 @@ fn limit_pps() -> u32 {
     config_u32(CONFIG_INDEX_RATE_PPS)
 }
 
-/// Update the counter for `src` and return whether the configured limit is exceeded.
 #[inline(always)]
 fn over_limit<const N: usize>(
     map: &LruHashMap<[u8; N], RateLimitState>,

@@ -1,3 +1,5 @@
+//! eBPF program entry points for ingress XDP and egress TC.
+
 #![no_std]
 #![no_main]
 

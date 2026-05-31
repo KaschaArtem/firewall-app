@@ -1,4 +1,4 @@
-//! ICMP class policy (echo / traceroute / control).
+//! ICMP message classification and drop policy.
 
 use firewall_common::{
     icmp_policy_shift, ICMP_CLASS_NONE, ICMP_POLICY_ACT_DROP, ICMP_POLICY_ENABLED,

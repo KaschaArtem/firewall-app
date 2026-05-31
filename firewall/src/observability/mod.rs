@@ -1,3 +1,5 @@
+//! Decision logging, ring buffer reader, file output, and statistics polling.
+
 use crate::config::DecisionLogFileSettings;
 use firewall_common::{
     PacketDecisionEvent, ACTION_DROP, ACTION_PASS, DIRECTION_EGRESS, DIRECTION_INGRESS,
@@ -19,7 +21,6 @@ use tokio::sync::{mpsc, Mutex};
 
 pub const LOG_PATH: &str = "/var/log/firewall-application.log";
 
-/// Local wall time: `[DD.MM.YYYY HH:MM:SS.mmm]`
 pub fn format_local_timestamp(time: SystemTime) -> String {
     let dt: chrono::DateTime<chrono::Local> = time.into();
     format!("[{}]", dt.format("%d.%m.%Y %H:%M:%S%.3f"))
@@ -34,8 +35,6 @@ const STAT_PASSES: u32 = 1;
 
 pub type SharedDecisionLog = Arc<Mutex<DecisionLog>>;
 pub type SharedFileLogSettings = Arc<Mutex<DecisionLogFileSettings>>;
-
-// --- in-memory log + ring buffer reader ---
 
 #[derive(Clone, Debug)]
 struct LoggedDecision {
@@ -200,8 +199,6 @@ fn drain_ringbuf(
         }
     }
 }
-
-// --- persistent file log ---
 
 pub struct FileLogHandle {
     tx: mpsc::Sender<PacketDecisionEvent>,
@@ -386,8 +383,6 @@ fn backup_path(path: &Path) -> PathBuf {
     path.with_file_name(format!("{name}{BACKUP_SUFFIX}"))
 }
 
-// --- BPF stats poller ---
-
 pub fn spawn_stats_poller(shared_ebpf: Arc<Mutex<aya::Ebpf>>) {
     tokio::task::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
@@ -424,8 +419,6 @@ pub fn spawn_stats_poller(shared_ebpf: Arc<Mutex<aya::Ebpf>>) {
         }
     });
 }
-
-// --- formatting ---
 
 struct TokenBucket {
     tokens: f64,
@@ -558,7 +551,6 @@ fn format_endpoint(family: u8, addr: &[u8; 16], port: u16, protocol: u8) -> Stri
     }
 }
 
-/// Extra L4 detail (always show numeric fields for debugging).
 fn format_l4_extra(e: &PacketDecisionEvent) -> String {
     match e.protocol {
         6 | 17 => format!(" [sport={} dport={}]", e.src_port, e.dst_port),

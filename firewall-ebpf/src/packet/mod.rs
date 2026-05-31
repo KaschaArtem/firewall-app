@@ -1,4 +1,4 @@
-//! Packet access primitives shared by XDP and TC.
+//! Packet data access abstractions for XDP and TC.
 
 use aya_ebpf::programs::{TcContext, XdpContext};
 use core::mem;
@@ -11,7 +11,6 @@ pub use l3::{
     Ipv6Packet, L3Packet,
 };
 
-/// Bounds-checked access to `ctx.data()` / `ctx.data_end()`.
 pub trait PacketData {
     fn data(&self) -> usize;
     fn data_end(&self) -> usize;
@@ -37,11 +36,9 @@ impl PacketData for TcContext {
     }
 }
 
-/// Read bytes via direct map (XDP) or `bpf_skb_load_bytes` (TC).
 pub trait PortReader {
     fn read_u8(&self, offset: usize) -> Option<u8>;
     fn read_u16_be(&self, offset: usize) -> Option<u16>;
-    /// TC: `data`/`data_end` are unreliable for L4; use load and skip bounds pre-check.
     fn uses_skb_load(&self) -> bool;
 }
 

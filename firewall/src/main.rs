@@ -32,7 +32,6 @@ async fn main() -> anyhow::Result<()> {
     let file_settings: SharedFileLogSettings =
         Arc::new(Mutex::new(initial_config.decision_log_file_settings()));
 
-    // Apply lists/mode before programs start handling traffic.
     bpf::apply_config_to_ebpf(&mut ebpf, &initial_config)
         .context("failed to apply configuration to BPF maps")?;
 

@@ -1,4 +1,4 @@
-//! Ingress RPF on external interfaces: drop packets with an internal source address.
+//! Ingress reverse-path forwarding spoof checks.
 
 use aya_ebpf::maps::lpm_trie::Key;
 use aya_ebpf::maps::LpmTrie;
@@ -29,7 +29,6 @@ fn ipv6_in_internal(map: &LpmTrie<[u8; 16], u8>, addr: [u8; 16]) -> bool {
     map.get(&Key::new(128, addr)).is_some()
 }
 
-/// `true` if the source address is spoofed (internal prefix on external ingress).
 #[inline(always)]
 pub fn ipv4_ingress_spoofed(direction: u8, src: [u8; 4]) -> bool {
     rpf_active_on_ingress(direction) && ipv4_in_internal(&RPF_INTERNAL_V4, src)

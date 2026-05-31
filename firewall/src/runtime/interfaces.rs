@@ -1,9 +1,8 @@
-//! Selecting attach targets: physical NICs only (no Docker bridges, veth, etc.).
+//! Keeps only hardware-backed network interfaces in the attach picker.
 
 use std::fs;
 use std::path::Path;
 
-/// `true` if `name` is a hardware-backed interface (PCI/USB), not a virtual netdev.
 #[cfg(target_os = "linux")]
 pub fn is_physical_netdev(name: &str) -> bool {
     if name == "lo" {

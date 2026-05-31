@@ -1,3 +1,5 @@
+//! YAML configuration parsing, validation, and conversion for BPF maps.
+
 use anyhow::Context as _;
 use firewall_common::{
     icmp_policy_shift, CONFIG_FLAG_RPF_ENABLED, ICMP_CLASS_CONTROL, ICMP_CLASS_ECHO,
@@ -15,7 +17,6 @@ pub use firewall_common::{
     MODE_ALL_DROP, MODE_ALL_PASS, MODE_DEFAULT_DROP, MODE_DEFAULT_PASS,
 };
 
-/// Limits for `/var/log/firewall-application.log` (rotation + anti-flood).
 #[derive(Debug, Clone)]
 pub struct DecisionLogFileSettings {
     pub max_file_bytes: u64,
@@ -24,47 +25,36 @@ pub struct DecisionLogFileSettings {
     pub max_memory_events: usize,
 }
 
-/// CIDR/host plus directions where the rule is active.
 #[derive(Debug, Clone)]
 pub struct IpListEntry {
     pub net: IpNet,
-    /// Bit mask: `LIST_DIR_INGRESS` | `LIST_DIR_EGRESS`.
     pub directions: u8,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct AppConfig {
     pub mode: String,
-    /// In-memory window for summary on exit (minutes).
     pub decision_log_retention_minutes: u64,
-    /// Max size of the active log file before rotation to `.1` (megabytes).
     #[serde(default = "default_log_max_file_mb")]
     pub decision_log_max_file_mb: u64,
-    /// Sustained max lines written per second under flood (token bucket refill).
     #[serde(default = "default_log_max_events_per_second")]
     pub decision_log_max_events_per_second: u32,
-    /// Short burst above sustained rate (token bucket capacity).
     #[serde(default = "default_log_rate_burst")]
     pub decision_log_rate_burst: u32,
-    /// Cap in-memory events during DDoS (oldest dropped first).
     #[serde(default = "default_log_max_memory_events")]
     pub decision_log_max_memory_events: usize,
     #[serde(default)]
     pub whitelist_ips: Option<Vec<IpListEntrySerde>>,
     #[serde(default)]
     pub blacklist_ips: Option<Vec<IpListEntrySerde>>,
-    /// Ingress anti-spoofing on an external interface (RPF / BCP38-style).
     #[serde(default)]
     pub rpf: RpfConfig,
-    /// Per-class ICMP filtering (echo / traceroute / control).
     #[serde(default)]
     pub icmp: IcmpFilterConfig,
-    /// Per source-IP L3 packet rate limit (ingress + egress).
     #[serde(default)]
     pub rate_limit: RateLimitConfig,
 }
 
-/// Limit packets per source IP address (1-second sliding window in eBPF).
 #[derive(Deserialize, Debug, Clone)]
 pub struct RateLimitConfig {
     #[serde(default)]
@@ -86,18 +76,14 @@ fn default_rate_pps() -> u32 {
     100
 }
 
-/// ICMP class policy: `pass` or `drop` per message category.
 #[derive(Deserialize, Debug, Clone)]
 pub struct IcmpFilterConfig {
     #[serde(default)]
     pub enabled: bool,
-    /// Echo Request (8) / Echo Reply (0), ICMPv6 128/129.
     #[serde(default = "default_icmp_pass")]
     pub echo: String,
-    /// Time Exceeded, trace-related Dest Unreachable, etc.
     #[serde(default = "default_icmp_pass")]
     pub traceroute: String,
-    /// Redirect, admin unreachable, parameter problem, etc.
     #[serde(default = "default_icmp_pass")]
     pub control: String,
     #[serde(default = "default_icmp_pass")]
@@ -120,17 +106,14 @@ fn default_icmp_pass() -> String {
     "pass".to_string()
 }
 
-/// Reverse-path check: drop ingress packets whose source is in an internal prefix.
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct RpfConfig {
     #[serde(default)]
     pub enabled: bool,
-    /// Private/site prefixes; defaults to RFC1918 + loopback when omitted.
     #[serde(default)]
     pub internal_subnets: Option<Vec<String>>,
 }
 
-/// `127.0.0.1` or `{ ip: 10.0.0.0/8, direction: egress }`.
 #[derive(Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum IpListEntrySerde {

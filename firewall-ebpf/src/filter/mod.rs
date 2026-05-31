@@ -1,4 +1,4 @@
-//! Firewall policy on parsed L3 packets: pre-policy checks, then list/mode rules.
+//! Applies packet filtering: pre-policy checks, then whitelist/blacklist rules.
 
 mod icmp;
 mod ratelimit;
@@ -28,8 +28,6 @@ use crate::packet::{
     L3ParseOutcome, L4Info, PacketData, PortReader,
 };
 
-// --- counters ---
-
 #[inline(always)]
 fn count_drop() {
     bump(STAT_DROPS);
@@ -46,8 +44,6 @@ fn bump(index: u32) {
         let _ = STATS.set(index, n.wrapping_add(1), 0);
     }
 }
-
-// --- decision ringbuf ---
 
 #[inline(always)]
 fn should_record(direction: u8, action: u8, reason: u8) -> bool {
@@ -131,8 +127,6 @@ fn record_ipv6(direction: u8, action: u8, reason: u8, pkt: &Ipv6Packet) {
     );
 }
 
-// --- verdict helpers ---
-
 #[inline(always)]
 fn drop_ipv4(direction: u8, reason: u8, pkt: &Ipv4Packet) -> FilterVerdict {
     record_ipv4(direction, ACTION_DROP, reason, pkt);
@@ -147,7 +141,6 @@ fn drop_ipv6(direction: u8, reason: u8, pkt: &Ipv6Packet) -> FilterVerdict {
     FilterVerdict::Drop
 }
 
-/// Checks applied before list/mode policy (RPF, ICMP filter, rate limit).
 #[inline(always)]
 fn pre_policy_ipv4(direction: u8, pkt: &Ipv4Packet) -> Option<FilterVerdict> {
     if rpf::ipv4_ingress_spoofed(direction, pkt.src) {
@@ -175,8 +168,6 @@ fn pre_policy_ipv6(direction: u8, pkt: &Ipv6Packet) -> Option<FilterVerdict> {
     }
     None
 }
-
-// --- filter entry points ---
 
 #[derive(PartialEq, Eq)]
 enum FilterVerdict {
@@ -274,8 +265,6 @@ fn drop_malformed(direction: u8, family: u8) -> Result<FilterVerdict, u32> {
     Ok(FilterVerdict::Drop)
 }
 
-// --- list lookups ---
-
 #[inline(always)]
 fn ipv4_in_list(map: &LpmTrie<[u8; 4], u8>, addr: [u8; 4], packet_direction: u8) -> bool {
     if let Some(dirs) = map.get(&Key::new(32, addr)) {
@@ -315,8 +304,6 @@ fn ipv6_blacklisted(src: [u8; 16], dst: [u8; 16], packet_direction: u8) -> bool 
     ipv6_in_list(&BLACKLIST_V6, src, packet_direction)
         || ipv6_in_list(&BLACKLIST_V6, dst, packet_direction)
 }
-
-// --- L3 policy (extend per-family logic here) ---
 
 #[inline(always)]
 fn apply_ipv4_mode(

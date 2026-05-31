@@ -1,4 +1,4 @@
-//! L3 parsing: Ethernet demux, IPv4/IPv6 headers, and a unified `L3Packet` view.
+//! Ethernet demux and IPv4/IPv6 header parsing.
 
 use aya_ebpf::programs::TcContext;
 use firewall_common::{FAMILY_IPV4, FAMILY_IPV6};
@@ -15,8 +15,6 @@ const IPPROTO_TCP: u8 = 6;
 const IPPROTO_UDP: u8 = 17;
 const IPPROTO_ICMPV6: u8 = 58;
 
-/// L4 parse lives in this module (same compilation unit as L3) so the verifier keeps packet bounds.
-
 #[derive(Clone, Copy, Default)]
 pub struct L4Info {
     pub protocol: u8,
@@ -27,20 +25,16 @@ pub struct L4Info {
     pub dst_port: u16,
 }
 
-/// Result of L3 demux + sanity checks.
 #[derive(Clone, Copy)]
 pub enum L3ParseOutcome {
     Packet(L3Packet),
-    /// Not IPv4/IPv6 (or unknown L3 on TC).
     NotIp,
-    /// Failed version, length, or IPv4 header checksum checks.
     Invalid { family: u8 },
 }
 
 const IPV4_HDR_LEN: usize = 20;
 const IPV6_HDR_LEN: usize = 40;
 const IPV4_MAX_HDR_LEN: usize = 60;
-/// Max IPv4 header words for checksum loop (verifier needs a fixed bound).
 const IPV4_MAX_HDR_WORDS: usize = IPV4_MAX_HDR_LEN / 2;
 
 #[inline(always)]
@@ -100,7 +94,6 @@ fn validate_ipv4_header<C: PacketData + PortReader>(ctx: &C, l3_offset: usize) -
         return false;
     }
 
-    // `total_len` must fit in the captured buffer starting at L3.
     let span = packet_span(ctx);
     if l3_offset >= span || total_len > span.saturating_sub(l3_offset) {
         return false;
@@ -110,7 +103,6 @@ fn validate_ipv4_header<C: PacketData + PortReader>(ctx: &C, l3_offset: usize) -
         return false;
     }
 
-    // Offset 10: header checksum. Zero is common with RX checksum offload — skip verify then.
     let hdr_csum = ctx.read_u16_be(l3_offset + 10).unwrap_or(0);
     if hdr_csum == 0 {
         return true;
@@ -201,7 +193,6 @@ fn l4_fits<C: PacketData>(ctx: &C, l4_offset: usize, proto: u8) -> bool {
     start.saturating_add(l4_offset).saturating_add(need) <= end
 }
 
-/// Parsed IPv4 header — extend here for TTL, DSCP, fragmentation checks, etc.
 #[derive(Clone, Copy)]
 pub struct Ipv4Packet {
     pub src: [u8; 4],
@@ -216,7 +207,6 @@ impl Ipv4Packet {
         FAMILY_IPV4
     }
 
-    /// Parse IPv4 at `l3_offset` (start of the IPv4 header).
     #[inline(always)]
     pub fn parse_at<C: PacketData + PortReader>(
         ctx: &C,
@@ -241,7 +231,6 @@ impl Ipv4Packet {
     }
 }
 
-/// Parsed IPv6 header — extend here for flow label, hop limit, extension headers, etc.
 #[derive(Clone, Copy)]
 pub struct Ipv6Packet {
     pub src: [u8; 16],
@@ -278,7 +267,6 @@ impl Ipv6Packet {
     }
 }
 
-/// Unified L3 view for policy and logging.
 #[derive(Clone, Copy)]
 pub enum L3Packet {
     V4(Ipv4Packet),
@@ -286,7 +274,6 @@ pub enum L3Packet {
 }
 
 
-/// Where the L3 header starts on a TC skb (Ethernet-present or L3-only).
 #[derive(Clone, Copy)]
 pub enum TcL3Hint {
     Ipv4(usize),
@@ -294,7 +281,6 @@ pub enum TcL3Hint {
     Unknown,
 }
 
-/// Demux Ethernet and parse the inner L3 header.
 #[inline(always)]
 pub fn parse_from_ethernet<C: PacketData + PortReader>(
     ctx: &C,
@@ -302,7 +288,6 @@ pub fn parse_from_ethernet<C: PacketData + PortReader>(
     const ETH_P_IP: u16 = 0x0800;
     const ETH_P_IPV6: u16 = 0x86DD;
 
-    // Bounds-check Ethernet header; read ethertype by offset (verifier-friendly).
     let _ = unsafe { ptr_at::<_, EthHdr>(ctx, 0)? };
     let l3_offset = EthHdr::LEN;
 
@@ -327,7 +312,6 @@ pub fn parse_from_ethernet<C: PacketData + PortReader>(
     }
 }
 
-/// Detect L3 offset on TC (Ethernet header may be present or stripped).
 #[inline(always)]
 pub fn detect_tc_l3(ctx: &TcContext) -> TcL3Hint {
     const ETH_P_IP: u16 = 0x0800;
@@ -353,7 +337,6 @@ pub fn detect_tc_l3(ctx: &TcContext) -> TcL3Hint {
     TcL3Hint::Unknown
 }
 
-/// Parse L3 from a TC hint; returns `None` on parse failure (pass-through upstream).
 #[inline(always)]
 pub fn parse_from_tc_hint<C: PacketData + PortReader>(
     ctx: &C,

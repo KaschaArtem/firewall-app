@@ -1,4 +1,4 @@
-//! ICMP/ICMPv6 type parsing and message classification.
+//! ICMP and ICMPv6 type parsing and classification.
 
 use firewall_common::{
     ICMP_CLASS_CONTROL, ICMP_CLASS_ECHO, ICMP_CLASS_NONE, ICMP_CLASS_OTHER,
@@ -8,7 +8,6 @@ use firewall_common::{
 const IPPROTO_ICMP: u8 = 1;
 const IPPROTO_ICMPV6: u8 = 58;
 
-/// Classify ICMPv4 type/code (RFC 792).
 #[inline(always)]
 fn classify_icmpv4(typ: u8, code: u8) -> u8 {
     match typ {
@@ -23,7 +22,6 @@ fn classify_icmpv4(typ: u8, code: u8) -> u8 {
     }
 }
 
-/// Classify ICMPv6 type/code (RFC 4443).
 #[inline(always)]
 fn classify_icmpv6(typ: u8, code: u8) -> u8 {
     match typ {
@@ -38,7 +36,6 @@ fn classify_icmpv6(typ: u8, code: u8) -> u8 {
     }
 }
 
-/// Returns ICMP class for IP protocols 1 and 58; `ICMP_CLASS_NONE` otherwise.
 #[inline(always)]
 pub fn classify_icmp(proto: u8, typ: u8, code: u8) -> u8 {
     match proto {

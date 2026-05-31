@@ -1,3 +1,5 @@
+//! Loads eBPF programs, attaches XDP/TC hooks, and syncs config into BPF maps.
+
 use anyhow::Context as _;
 use aya::maps::{Array, LpmTrie, lpm_trie::Key};
 use aya::programs::{SchedClassifier, TcAttachType, Xdp, XdpFlags, tc};
@@ -237,7 +239,6 @@ fn reload_lpm_trie_v6(ebpf: &mut aya::Ebpf, map_name: &str, entries: &[IpListEnt
 const STAT_DROPS: u32 = 0;
 const STAT_PASSES: u32 = 1;
 
-/// Cumulative pass/drop counts from the BPF filter (all handled packets).
 pub fn read_packet_stats(ebpf: &mut aya::Ebpf) -> anyhow::Result<(u64, u64)> {
     let stats = Array::<_, u64>::try_from(
         ebpf.map_mut("STATS")

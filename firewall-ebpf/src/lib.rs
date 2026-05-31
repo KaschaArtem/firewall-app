@@ -1,3 +1,3 @@
-#![no_std]
+//! eBPF library target used by the build pipeline.
 
-// This file exists to enable the library target.
+#![no_std]

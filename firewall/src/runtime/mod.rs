@@ -1,3 +1,5 @@
+//! Runtime glue: interface selection, config hot-reload, and BPF map updates.
+
 mod interfaces;
 
 use crate::bpf::apply_config_to_ebpf;
